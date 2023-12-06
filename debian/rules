@@ -1,4 +1,21 @@
 #!/usr/bin/make -f
 
+# remove some packages which are not needed by other packages currently
+# to cut down dependencies.
+export DH_GOLANG_EXCLUDES := \
+	example/ \
+	internal/tools \
+	bridge/opencensus \
+	bridge/opentracing \
+	exporters/jaeger/internal/gen-go/agent/agent-remote \
+	exporters/jaeger/internal/gen-go/jaeger/collector-remote \
+	exporters/jaeger/internal/gen-go/zipkincore/zipkin_collector-remote \
+	exporters/otlp exporters/prometheus exporters/zipkin
+
+export DH_GOLANG_INSTALL_EXTRA := \
+	$(wildcard internal/tools/semconvkit/templates/*.tmpl) \
+	$(wildcard internal/tools/semconvkit/templates/*/*.tmpl) \
+	exporters/jaeger/internal/third_party/thrift/NOTICE
+
 %:
-	dh $@
+	dh $@ --builddirectory=_build --buildsystem=golang --with=golang
