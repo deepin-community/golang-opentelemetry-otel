@@ -1,0 +1,21 @@
+From: Shengjing Zhu <zhsj@debian.org>
+Date: Thu, 15 Jun 2023 16:11:53 +0800
+Subject: Fix import comment
+
+---
+ bridge/opencensus/internal/ocmetric/metric_test.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/bridge/opencensus/internal/ocmetric/metric_test.go b/bridge/opencensus/internal/ocmetric/metric_test.go
+index 0cbb217..3bda1ff 100644
+--- a/bridge/opencensus/internal/ocmetric/metric_test.go
++++ b/bridge/opencensus/internal/ocmetric/metric_test.go
+@@ -12,7 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-package internal // import "go.opentelemetry.io/otel/bridge/opencensus/opencensusmetric/internal"
++package internal // import "go.opentelemetry.io/otel/bridge/opencensus/internal/ocmetric"
+ 
+ import (
+ 	"errors"
