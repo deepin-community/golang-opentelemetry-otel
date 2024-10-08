@@ -10,12 +10,16 @@ export DH_GOLANG_EXCLUDES := \
 	exporters/jaeger/internal/gen-go/agent/agent-remote \
 	exporters/jaeger/internal/gen-go/jaeger/collector-remote \
 	exporters/jaeger/internal/gen-go/zipkincore/zipkin_collector-remote \
-	exporters/otlp exporters/prometheus exporters/zipkin
+	exporters/zipkin
 
 export DH_GOLANG_INSTALL_EXTRA := \
 	$(wildcard internal/tools/semconvkit/templates/*.tmpl) \
 	$(wildcard internal/tools/semconvkit/templates/*/*.tmpl) \
 	exporters/jaeger/internal/third_party/thrift/NOTICE
+
+# autopkgtest.ubuntu.com exports these variable and causes the tests hanging
+unexport https_proxy
+unexport http_proxy
 
 %:
 	dh $@ --builddirectory=_build --buildsystem=golang --with=golang

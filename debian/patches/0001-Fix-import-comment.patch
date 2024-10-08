@@ -7,7 +7,7 @@ Subject: Fix import comment
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/bridge/opencensus/internal/ocmetric/metric_test.go b/bridge/opencensus/internal/ocmetric/metric_test.go
-index 0cbb217..3bda1ff 100644
+index b7a25e5..6512a1d 100644
 --- a/bridge/opencensus/internal/ocmetric/metric_test.go
 +++ b/bridge/opencensus/internal/ocmetric/metric_test.go
 @@ -12,7 +12,7 @@

@@ -1,3 +1,46 @@
+golang-opentelemetry-otel (1.21.0-4) unstable; urgency=medium
+
+  * Revert "Skip tiemed out TestStartErrorInvalidAddress"
+  * Unset http proxy environment to fix tests hanging
+
+ -- Shengjing Zhu <zhsj@debian.org>  Tue, 27 Aug 2024 16:08:50 +0800
+
+golang-opentelemetry-otel (1.21.0-3) unstable; urgency=medium
+
+  * Bump golang-google-grpc-dev to 1.34.0
+  * Skip tiemed out TestStartErrorInvalidAddress
+
+ -- Shengjing Zhu <zhsj@debian.org>  Thu, 15 Aug 2024 19:24:47 +0800
+
+golang-opentelemetry-otel (1.21.0-2) unstable; urgency=medium
+
+  * Team upload
+  * Upload changes from experimental to unstable
+  * Update Standards-Version to 4.7.0 in d/control (no changes needed)
+
+ -- Mathias Gibbens <gibmat@debian.org>  Thu, 25 Jul 2024 09:18:25 +0000
+
+golang-opentelemetry-otel (1.21.0-1) experimental; urgency=medium
+
+  * Team upload
+  * New upstream release
+
+ -- Reinhard Tartler <siretart@tauware.de>  Sun, 30 Jun 2024 16:16:41 -0400
+
+golang-opentelemetry-otel (1.19.0-0) experimental; urgency=medium
+
+  * Team upload.
+  * New upstream release
+
+ -- Reinhard Tartler <siretart@tauware.de>  Fri, 14 Jun 2024 20:07:32 -0400
+
+golang-opentelemetry-otel (1.16.0-2) experimental; urgency=medium
+
+  * Team Upload.
+  * Enable the otlp exporter
+
+ -- Reinhard Tartler <siretart@tauware.de>  Wed, 05 Jun 2024 21:57:18 -0400
+
 golang-opentelemetry-otel (1.16.0-1) unstable; urgency=medium
 
   * New upstream release 1.16.0

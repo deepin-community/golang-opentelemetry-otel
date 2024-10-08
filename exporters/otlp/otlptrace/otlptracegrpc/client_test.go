@@ -34,8 +34,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/internal/otlptracetest"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc/internal/otlptracetest"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -188,7 +188,7 @@ func TestNewCollectorOnBadConnection(t *testing.T) {
 	endpoint := fmt.Sprintf("localhost:%s", collectorPortStr)
 	ctx := context.Background()
 	exp := newGRPCExporter(t, ctx, endpoint)
-	_ = exp.Shutdown(ctx)
+	require.NoError(t, exp.Shutdown(ctx))
 }
 
 func TestNewWithEndpoint(t *testing.T) {
@@ -197,7 +197,7 @@ func TestNewWithEndpoint(t *testing.T) {
 
 	ctx := context.Background()
 	exp := newGRPCExporter(t, ctx, mc.endpoint)
-	_ = exp.Shutdown(ctx)
+	require.NoError(t, exp.Shutdown(ctx))
 }
 
 func TestNewWithHeaders(t *testing.T) {
