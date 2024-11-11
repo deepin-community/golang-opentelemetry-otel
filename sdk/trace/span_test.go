@@ -1,21 +1,11 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package trace
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"testing"
 
@@ -23,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestSetStatus(t *testing.T) {
@@ -241,5 +232,66 @@ func TestTruncateAttr(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, test.want, truncateAttr(test.limit, test.attr))
 		})
+	}
+}
+
+func TestLogDropAttrs(t *testing.T) {
+	orig := logDropAttrs
+	t.Cleanup(func() { logDropAttrs = orig })
+
+	var called bool
+	logDropAttrs = func() { called = true }
+
+	s := &recordingSpan{}
+	s.addDroppedAttr(1)
+	assert.True(t, called, "logDropAttrs not called")
+
+	called = false
+	s.addDroppedAttr(1)
+	assert.False(t, called, "logDropAttrs called multiple times for same Span")
+}
+
+func BenchmarkRecordingSpanSetAttributes(b *testing.B) {
+	var attrs []attribute.KeyValue
+	for i := 0; i < 100; i++ {
+		attr := attribute.String(fmt.Sprintf("hello.attrib%d", i), fmt.Sprintf("goodbye.attrib%d", i))
+		attrs = append(attrs, attr)
+	}
+
+	ctx := context.Background()
+	for _, limit := range []bool{false, true} {
+		b.Run(fmt.Sprintf("WithLimit/%t", limit), func(b *testing.B) {
+			b.ReportAllocs()
+			sl := NewSpanLimits()
+			if limit {
+				sl.AttributeCountLimit = 50
+			}
+			tp := NewTracerProvider(WithSampler(AlwaysSample()), WithSpanLimits(sl))
+			tracer := tp.Tracer("tracer")
+
+			b.ResetTimer()
+			for n := 0; n < b.N; n++ {
+				_, span := tracer.Start(ctx, "span")
+				span.SetAttributes(attrs...)
+				span.End()
+			}
+		})
+	}
+}
+
+func BenchmarkSpanEnd(b *testing.B) {
+	tracer := NewTracerProvider().Tracer("")
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.SpanContext{})
+
+	spans := make([]trace.Span, b.N)
+	for i := 0; i < b.N; i++ {
+		_, span := tracer.Start(ctx, "")
+		spans[i] = span
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		spans[i].End()
 	}
 }
