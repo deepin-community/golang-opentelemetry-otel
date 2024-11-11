@@ -1,16 +1,5 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package metric
 
@@ -19,10 +8,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.opentelemetry.io/otel/sdk/metric/aggregation"
+	"go.opentelemetry.io/otel/attribute"
+	ottest "go.opentelemetry.io/otel/sdk/internal/internaltest"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
@@ -37,9 +28,11 @@ type reader struct {
 	shutdownFunc      func(context.Context) error
 }
 
+const envVarResourceAttributes = "OTEL_RESOURCE_ATTRIBUTES"
+
 var _ Reader = (*reader)(nil)
 
-func (r *reader) aggregation(kind InstrumentKind) aggregation.Aggregation { // nolint:revive  // import-shadow for method scoped by type.
+func (r *reader) aggregation(kind InstrumentKind) Aggregation { // nolint:revive  // import-shadow for method scoped by type.
 	return r.aggregationFunc(kind)
 }
 
@@ -48,6 +41,7 @@ func (r *reader) RegisterProducer(p Producer) { r.externalProducers = append(r.e
 func (r *reader) temporality(kind InstrumentKind) metricdata.Temporality {
 	return r.temporalityFunc(kind)
 }
+
 func (r *reader) Collect(ctx context.Context, rm *metricdata.ResourceMetrics) error {
 	return r.collectFunc(ctx, rm)
 }
@@ -61,8 +55,8 @@ func TestConfigReaderSignalsEmpty(t *testing.T) {
 	require.NotNil(t, s)
 
 	ctx := context.Background()
-	assert.Nil(t, f(ctx))
-	assert.Nil(t, s(ctx))
+	assert.NoError(t, f(ctx))
+	assert.NoError(t, s(ctx))
 	assert.ErrorIs(t, s(ctx), ErrReaderShutdown)
 }
 
@@ -119,10 +113,63 @@ func TestUnifyMultiError(t *testing.T) {
 	assert.Equal(t, unify(funcs)(context.Background()), target)
 }
 
+func mergeResource(t *testing.T, r1, r2 *resource.Resource) *resource.Resource {
+	r, err := resource.Merge(r1, r2)
+	assert.NoError(t, err)
+	return r
+}
+
 func TestWithResource(t *testing.T) {
-	res := resource.NewSchemaless()
-	c := newConfig([]Option{WithResource(res)})
-	assert.Same(t, res, c.res)
+	store, err := ottest.SetEnvVariables(map[string]string{
+		envVarResourceAttributes: "key=value,rk5=7",
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Restore()) }()
+
+	cases := []struct {
+		name    string
+		options []Option
+		want    *resource.Resource
+		msg     string
+	}{
+		{
+			name:    "explicitly empty resource",
+			options: []Option{WithResource(resource.Empty())},
+			want:    resource.Environment(),
+		},
+		{
+			name:    "uses default if no resource option",
+			options: []Option{},
+			want:    resource.Default(),
+		},
+		{
+			name:    "explicit resource",
+			options: []Option{WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5)))},
+			want:    mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5))),
+		},
+		{
+			name: "last resource wins",
+			options: []Option{
+				WithResource(resource.NewSchemaless(attribute.String("rk1", "vk1"), attribute.Int64("rk2", 5))),
+				WithResource(resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10))),
+			},
+			want: mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10))),
+		},
+		{
+			name:    "overlapping attributes with environment resource",
+			options: []Option{WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10)))},
+			want:    mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10))),
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := newConfig(tc.options).res
+			if diff := cmp.Diff(got, tc.want); diff != "" {
+				t.Errorf("WithResource:\n  -got +want %s", diff)
+			}
+		})
+	}
 }
 
 func TestWithReader(t *testing.T) {

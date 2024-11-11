@@ -11,10 +11,6 @@ Copyright: 2021 Shengjing Zhu <zhsj@debian.org>
 License: Apache-2.0
 Comment: Debian packaging is licensed under the same terms as upstream
 
-Files: exporters/jaeger/internal/third_party/thrift/*
-Copyright: 2006-2019 The Apache Software Foundation
-License: Apache-2.0
-
 License: Apache-2.0
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.

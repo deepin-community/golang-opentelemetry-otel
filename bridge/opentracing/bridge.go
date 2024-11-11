@@ -1,23 +1,11 @@
 // Copyright The OpenTelemetry Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 package opentracing // import "go.opentelemetry.io/otel/bridge/opentracing"
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 
@@ -33,10 +21,11 @@ import (
 	iBaggage "go.opentelemetry.io/otel/internal/baggage"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 var (
-	noopTracer = trace.NewNoopTracerProvider().Tracer("")
+	noopTracer = noop.NewTracerProvider().Tracer("")
 	noopSpan   = func() trace.Span {
 		_, s := noopTracer.Start(context.Background(), "")
 		return s
@@ -73,8 +62,7 @@ func (c *bridgeSpanContext) ForeachBaggageItem(handler func(k, v string) bool) {
 }
 
 func (c *bridgeSpanContext) setBaggageItem(restrictedKey, value string) {
-	crk := http.CanonicalHeaderKey(restrictedKey)
-	m, err := baggage.NewMember(crk, value)
+	m, err := baggage.NewMemberRaw(restrictedKey, value)
 	if err != nil {
 		return
 	}
@@ -82,8 +70,7 @@ func (c *bridgeSpanContext) setBaggageItem(restrictedKey, value string) {
 }
 
 func (c *bridgeSpanContext) baggageItem(restrictedKey string) baggage.Member {
-	crk := http.CanonicalHeaderKey(restrictedKey)
-	return c.bag.Member(crk)
+	return c.bag.Member(restrictedKey)
 }
 
 type bridgeSpan struct {
@@ -317,8 +304,10 @@ type BridgeTracer struct {
 	propagator propagation.TextMapPropagator
 }
 
-var _ ot.Tracer = &BridgeTracer{}
-var _ ot.TracerContextWithSpanExtension = &BridgeTracer{}
+var (
+	_ ot.Tracer                         = &BridgeTracer{}
+	_ ot.TracerContextWithSpanExtension = &BridgeTracer{}
+)
 
 // NewBridgeTracer creates a new BridgeTracer. The new tracer forwards
 // the calls to the OpenTelemetry Noop tracer, so it should be
@@ -829,15 +818,13 @@ func newTextMapWrapperForInject(carrier interface{}) (*textMapWrapper, error) {
 	return t, nil
 }
 
-type textMapWriter struct {
-}
+type textMapWriter struct{}
 
 func (t *textMapWriter) Set(key string, value string) {
 	// maybe print a warning log.
 }
 
-type textMapReader struct {
-}
+type textMapReader struct{}
 
 func (t *textMapReader) ForeachKey(handler func(key, val string) error) error {
 	return nil // maybe print a warning log.

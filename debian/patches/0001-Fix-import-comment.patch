@@ -7,12 +7,12 @@ Subject: Fix import comment
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/bridge/opencensus/internal/ocmetric/metric_test.go b/bridge/opencensus/internal/ocmetric/metric_test.go
-index 0cbb217..3bda1ff 100644
+index afdcfaa..e3c73b5 100644
 --- a/bridge/opencensus/internal/ocmetric/metric_test.go
 +++ b/bridge/opencensus/internal/ocmetric/metric_test.go
-@@ -12,7 +12,7 @@
- // See the License for the specific language governing permissions and
- // limitations under the License.
+@@ -1,7 +1,7 @@
+ // Copyright The OpenTelemetry Authors
+ // SPDX-License-Identifier: Apache-2.0
  
 -package internal // import "go.opentelemetry.io/otel/bridge/opencensus/opencensusmetric/internal"
 +package internal // import "go.opentelemetry.io/otel/bridge/opencensus/internal/ocmetric"
