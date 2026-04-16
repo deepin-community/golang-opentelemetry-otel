@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //go:build aix || dragonfly || freebsd || linux || netbsd || openbsd || solaris || zos
-// +build aix dragonfly freebsd linux netbsd openbsd solaris zos
 
 package resource_test
 
@@ -124,11 +123,9 @@ PROP3='Final value'`)
 	}
 
 	for _, tc := range tt {
-		tc := tc
-
 		t.Run(tc.Name, func(t *testing.T) {
 			result := resource.ParseOSReleaseFile(tc.OSRelease)
-			require.EqualValues(t, tc.Parsed, result)
+			require.Equal(t, tc.Parsed, result)
 		})
 	}
 }
@@ -153,11 +150,9 @@ func TestSkip(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		tc := tc
-
 		t.Run(tc.Name, func(t *testing.T) {
 			result := resource.Skip(tc.Line)
-			require.EqualValues(t, tc.Expected, result)
+			require.Equal(t, tc.Expected, result)
 		})
 	}
 }
@@ -180,13 +175,11 @@ func TestParse(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		tc := tc
-
 		t.Run(tc.Name, func(t *testing.T) {
 			key, value, ok := resource.Parse(tc.Line)
-			require.EqualValues(t, tc.ExpectedKey, key)
-			require.EqualValues(t, tc.ExpectedValue, value)
-			require.EqualValues(t, tc.OK, ok)
+			require.Equal(t, tc.ExpectedKey, key)
+			require.Equal(t, tc.ExpectedValue, value)
+			require.Equal(t, tc.OK, ok)
 		})
 	}
 }
@@ -220,11 +213,9 @@ func TestUnquote(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		tc := tc
-
 		t.Run(tc.Name, func(t *testing.T) {
 			result := resource.Unquote(tc.Text)
-			require.EqualValues(t, tc.Expected, result)
+			require.Equal(t, tc.Expected, result)
 		})
 	}
 }
@@ -244,11 +235,9 @@ func TestUnescape(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		tc := tc
-
 		t.Run(tc.Name, func(t *testing.T) {
 			result := resource.Unescape(tc.Text)
-			require.EqualValues(t, tc.Expected, result)
+			require.Equal(t, tc.Expected, result)
 		})
 	}
 }
@@ -286,11 +275,9 @@ func TestBuildOSRelease(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		tc := tc
-
 		t.Run(tc.Name, func(t *testing.T) {
 			result := resource.BuildOSRelease(tc.Values)
-			require.EqualValues(t, tc.Expected, result)
+			require.Equal(t, tc.Expected, result)
 		})
 	}
 }

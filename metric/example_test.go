@@ -7,7 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"runtime"
 	"time"
@@ -15,7 +15,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
 
 var meter = otel.Meter("my-service-meter")
@@ -110,7 +110,7 @@ func ExampleMeter_counter() {
 	if err != nil {
 		panic(err)
 	}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/", func(_ http.ResponseWriter, r *http.Request) {
 		apiCounter.Add(r.Context(), 1)
 
 		// do some work in an API call
@@ -132,15 +132,11 @@ func ExampleMeter_upDownCounter() {
 		panic(err)
 	}
 
-	_ = func() {
-		// code that adds an item to the collection
-		itemsCounter.Add(context.Background(), 1)
-	}
+	// Add an item to the collection.
+	itemsCounter.Add(context.Background(), 1)
 
-	_ = func() {
-		// code that removes an item from the collection
-		itemsCounter.Add(context.Background(), -1)
-	}
+	// Remove an item from the collection.
+	itemsCounter.Add(context.Background(), -1)
 }
 
 // Gauges can be used to record non-additive values when changes occur.
@@ -159,18 +155,18 @@ func ExampleMeter_gauge() {
 	getCPUFanSpeed := func() int64 {
 		// Generates a random fan speed for demonstration purpose.
 		// In real world applications, replace this to get the actual fan speed.
-		return int64(1500 + rand.Intn(1000))
+		return int64(1500 + rand.IntN(1000))
 	}
 
 	fanSpeedSubscription := make(chan int64, 1)
 	go func() {
 		defer close(fanSpeedSubscription)
 
-		for idx := 0; idx < 5; idx++ {
+		for range 5 {
 			// Synchronous gauges are used when the measurement cycle is
 			// synchronous to an external change.
 			// Simulate that external cycle here.
-			time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
+			time.Sleep(time.Duration(rand.IntN(3)) * time.Second)
 			fanSpeed := getCPUFanSpeed()
 			fanSpeedSubscription <- fanSpeed
 		}
@@ -195,7 +191,7 @@ func ExampleMeter_histogram() {
 	if err != nil {
 		panic(err)
 	}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/", func(_ http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
 		// do some work in an API call
@@ -229,41 +225,37 @@ func ExampleMeter_observableCounter() {
 //
 // Here's how you might report some database metrics.
 func ExampleMeter_observableUpDownCounter() {
-	// The function registers asynchronous metrics for the provided db.
-	// Make sure to unregister metric.Registration before closing the provided db.
-	_ = func(db *sql.DB, meter metric.Meter, poolName string) (metric.Registration, error) {
-		max, err := meter.Int64ObservableUpDownCounter(
-			"db.client.connections.max",
-			metric.WithDescription("The maximum number of open connections allowed."),
-			metric.WithUnit("{connection}"),
-		)
-		if err != nil {
-			return nil, err
-		}
+	m, err := meter.Int64ObservableUpDownCounter(
+		"db.client.connections.max",
+		metric.WithDescription("The maximum number of open connections allowed."),
+		metric.WithUnit("{connection}"),
+	)
+	if err != nil {
+		panic(err)
+	}
 
-		waitTime, err := meter.Int64ObservableUpDownCounter(
-			"db.client.connections.wait_time",
-			metric.WithDescription("The time it took to obtain an open connection from the pool."),
-			metric.WithUnit("ms"),
-		)
-		if err != nil {
-			return nil, err
-		}
+	waitTime, err := meter.Int64ObservableUpDownCounter(
+		"db.client.connections.wait_time",
+		metric.WithDescription("The time it took to obtain an open connection from the pool."),
+		metric.WithUnit("ms"),
+	)
+	if err != nil {
+		panic(err)
+	}
 
-		reg, err := meter.RegisterCallback(
-			func(_ context.Context, o metric.Observer) error {
-				stats := db.Stats()
-				o.ObserveInt64(max, int64(stats.MaxOpenConnections))
-				o.ObserveInt64(waitTime, int64(stats.WaitDuration))
-				return nil
-			},
-			max,
-			waitTime,
-		)
-		if err != nil {
-			return nil, err
-		}
-		return reg, nil
+	var db *sql.DB // DB is initialized elsewhere.
+	_, err = meter.RegisterCallback(
+		func(_ context.Context, o metric.Observer) error {
+			stats := db.Stats()
+			o.ObserveInt64(m, int64(stats.MaxOpenConnections))
+			o.ObserveInt64(waitTime, int64(stats.WaitDuration))
+			return nil
+		},
+		m,
+		waitTime,
+	)
+	if err != nil {
+		panic(err)
 	}
 }
 
@@ -301,7 +293,7 @@ func ExampleMeter_attributes() {
 	if err != nil {
 		panic(err)
 	}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/", func(_ http.ResponseWriter, r *http.Request) {
 		// do some work in an API call and set the response HTTP status code
 		statusCode := http.StatusOK
 

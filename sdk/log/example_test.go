@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	logapi "go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
@@ -52,7 +51,7 @@ func Example() {
 }
 
 // Use a processor that filters out records based on the provided context.
-func ExampleProcessor_filtering() {
+func ExampleProcessor_contextFilter() {
 	// Existing processor that emits telemetry.
 	var processor log.Processor = log.NewBatchProcessor(nil)
 
@@ -82,15 +81,6 @@ func WithIgnoreLogs(ctx context.Context) context.Context {
 // [WithIgnoreLogs] is passed to its methods.
 type ContextFilterProcessor struct {
 	log.Processor
-
-	lazyFilter sync.Once
-	// Use the experimental FilterProcessor interface
-	// (go.opentelemetry.io/otel/sdk/log/internal/x).
-	filter filter
-}
-
-type filter interface {
-	Enabled(ctx context.Context, param logapi.EnabledParameters) bool
 }
 
 func (p *ContextFilterProcessor) OnEmit(ctx context.Context, record *log.Record) error {
@@ -100,18 +90,66 @@ func (p *ContextFilterProcessor) OnEmit(ctx context.Context, record *log.Record)
 	return p.Processor.OnEmit(ctx, record)
 }
 
-func (p *ContextFilterProcessor) Enabled(ctx context.Context, param logapi.EnabledParameters) bool {
-	p.lazyFilter.Do(func() {
-		if f, ok := p.Processor.(filter); ok {
-			p.filter = f
-		}
-	})
-	return !ignoreLogs(ctx) && (p.filter == nil || p.filter.Enabled(ctx, param))
+func (p *ContextFilterProcessor) Enabled(ctx context.Context, param log.EnabledParameters) bool {
+	return !ignoreLogs(ctx) && p.Processor.Enabled(ctx, param)
 }
 
 func ignoreLogs(ctx context.Context) bool {
 	_, ok := ctx.Value(ignoreLogsKey).(bool)
 	return ok
+}
+
+// Use a processor which sets EventName on log records having "otel.event.name" string attribute.
+// This is useful for users of logging libraries that do not support
+// setting the event name on log records, but do support attributes.
+func ExampleProcessor_eventName() {
+	// Existing processor that emits telemetry.
+	var processor log.Processor = log.NewBatchProcessor(nil)
+
+	// Add a processor so that it sets EventName on log records.
+	eventNameProcessor := &EventNameProcessor{}
+
+	// The created processor can then be registered with
+	// the OpenTelemetry Logs SDK using the WithProcessor option.
+	_ = log.NewLoggerProvider(
+		// Order is important here. Set EventName before handing to the processor.
+		log.WithProcessor(eventNameProcessor),
+		log.WithProcessor(processor),
+	)
+}
+
+// EventNameProcessor is a [log.Processor] that sets the EventName
+// on log records having "otel.event.name" string attribute.
+// It is useful for logging libraries that do not support
+// setting the event name on log records,
+// but do support attributes.
+type EventNameProcessor struct{}
+
+// Enabled returns true, indicating this Processor will process all records.
+func (*EventNameProcessor) Enabled(context.Context, log.EnabledParameters) bool {
+	return true
+}
+
+// OnEmit sets the EventName on log records having an "otel.event.name" string attribute.
+// The original attribute is not removed.
+func (*EventNameProcessor) OnEmit(_ context.Context, record *log.Record) error {
+	record.WalkAttributes(func(kv logapi.KeyValue) bool {
+		if kv.Key == "otel.event.name" && kv.Value.Kind() == logapi.KindString {
+			record.SetEventName(kv.Value.AsString())
+		}
+		return true
+	})
+	return nil
+}
+
+// Shutdown returns nil.
+func (*EventNameProcessor) Shutdown(context.Context) error {
+	return nil
+}
+
+// ForceFlush returns nil.
+func (*EventNameProcessor) ForceFlush(context.Context) error {
+	return nil
 }
 
 // Use a processor which redacts sensitive data from some attributes.
@@ -135,9 +173,14 @@ func ExampleProcessor_redact() {
 // from attributes containing "token" in the key.
 type RedactTokensProcessor struct{}
 
+// Enabled returns true, indicating this Processor will process all records.
+func (*RedactTokensProcessor) Enabled(context.Context, log.EnabledParameters) bool {
+	return true
+}
+
 // OnEmit redacts values from attributes containing "token" in the key
 // by replacing them with a REDACTED value.
-func (p *RedactTokensProcessor) OnEmit(ctx context.Context, record *log.Record) error {
+func (*RedactTokensProcessor) OnEmit(_ context.Context, record *log.Record) error {
 	record.WalkAttributes(func(kv logapi.KeyValue) bool {
 		if strings.Contains(strings.ToLower(kv.Key), "token") {
 			record.AddAttributes(logapi.String(kv.Key, "REDACTED"))
@@ -148,11 +191,11 @@ func (p *RedactTokensProcessor) OnEmit(ctx context.Context, record *log.Record) 
 }
 
 // Shutdown returns nil.
-func (p *RedactTokensProcessor) Shutdown(ctx context.Context) error {
+func (*RedactTokensProcessor) Shutdown(context.Context) error {
 	return nil
 }
 
 // ForceFlush returns nil.
-func (p *RedactTokensProcessor) ForceFlush(ctx context.Context) error {
+func (*RedactTokensProcessor) ForceFlush(context.Context) error {
 	return nil
 }

@@ -27,7 +27,7 @@ func TestFixedSizeExemplarConcurrentSafe(t *testing.T) {
 	i1, err := m.Int64Counter("counter.1")
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	add := func() {
 		i0.Add(ctx, 1)
@@ -37,10 +37,8 @@ func TestFixedSizeExemplarConcurrentSafe(t *testing.T) {
 	goRoutines := max(10, runtime.NumCPU())
 
 	var wg sync.WaitGroup
-	for n := 0; n < goRoutines; n++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goRoutines {
+		wg.Go(func() {
 			for {
 				select {
 				case <-ctx.Done():
@@ -49,12 +47,12 @@ func TestFixedSizeExemplarConcurrentSafe(t *testing.T) {
 					require.NotPanics(t, add)
 				}
 			}
-		}()
+		})
 	}
 
 	const collections = 100
 	var rm metricdata.ResourceMetrics
-	for c := 0; c < collections; c++ {
+	for range collections {
 		require.NotPanics(t, func() { _ = r.Collect(ctx, &rm) })
 	}
 

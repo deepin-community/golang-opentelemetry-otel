@@ -20,6 +20,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -29,16 +30,25 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
-
-	"go.opentelemetry.io/otel"
 	collogpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	cpb "go.opentelemetry.io/proto/otlp/common/v1"
 	lpb "go.opentelemetry.io/proto/otlp/logs/v1"
 	rpb "go.opentelemetry.io/proto/otlp/resource/v1"
+	"google.golang.org/protobuf/proto"
 
+	"go.opentelemetry.io/otel"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp/internal"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp/internal/observ"
+
+	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/log"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	"go.opentelemetry.io/otel/semconv/v1.40.0/otelconv"
 )
 
 var (
@@ -229,7 +239,11 @@ type httpCollector struct {
 // If errCh is not nil, the collector will respond to HTTP requests with errors
 // sent on that channel. This means that if errCh is not nil Export calls will
 // block until an error is received.
-func newHTTPCollector(endpoint string, resultCh <-chan exportResult, opts ...func(*httpCollector)) (*httpCollector, error) {
+func newHTTPCollector(
+	endpoint string,
+	resultCh <-chan exportResult,
+	opts ...func(*httpCollector),
+) (*httpCollector, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
@@ -250,7 +264,7 @@ func newHTTPCollector(endpoint string, resultCh <-chan exportResult, opts ...fun
 		opt(c)
 	}
 
-	c.listener, err = net.Listen("tcp", u.Host)
+	c.listener, err = (&net.ListenConfig{}).Listen(context.Background(), "tcp", u.Host)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +364,7 @@ func (c *httpCollector) record(r *http.Request) exportResult {
 	return exportResult{Err: err}
 }
 
-func (c *httpCollector) readBody(r *http.Request) (body []byte, err error) {
+func (*httpCollector) readBody(r *http.Request) (body []byte, err error) {
 	var reader io.ReadCloser
 	switch r.Header.Get("Content-Encoding") {
 	case "gzip":
@@ -434,8 +448,8 @@ func newWeakCertificate() (tls.Certificate, error) {
 	}
 	notBefore := time.Now()
 	notAfter := notBefore.Add(time.Hour)
-	max := new(big.Int).Lsh(big.NewInt(1), 128)
-	sn, err := rand.Int(rand.Reader, max)
+	m := new(big.Int).Lsh(big.NewInt(1), 128)
+	sn, err := rand.Int(rand.Reader, m)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -479,13 +493,13 @@ func TestClient(t *testing.T) {
 		addr := coll.Addr().String()
 		opts := []Option{WithEndpoint(addr), WithInsecure()}
 		cfg := newConfig(opts)
-		client, err := newHTTPClient(cfg)
+		client, err := newHTTPClient(t.Context(), cfg)
 		require.NoError(t, err)
 		return client, coll
 	}
 
 	t.Run("ClientHonorsContextErrors", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 
 		t.Run("DeadlineExceeded", func(t *testing.T) {
@@ -507,7 +521,7 @@ func TestClient(t *testing.T) {
 	})
 
 	t.Run("uploadLogs", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		client, coll := factory(nil)
 
 		require.NoError(t, client.uploadLogs(ctx, resourceLogs))
@@ -543,36 +557,24 @@ func TestClient(t *testing.T) {
 			Response: &collogpb.ExportLogsServiceResponse{},
 		}
 
-		ctx := context.Background()
+		ctx := t.Context()
 		client, _ := factory(rCh)
 
-		defer func(orig otel.ErrorHandler) {
-			otel.SetErrorHandler(orig)
-		}(otel.GetErrorHandler())
-
-		errs := []error{}
-		eh := otel.ErrorHandlerFunc(func(e error) { errs = append(errs, e) })
-		otel.SetErrorHandler(eh)
-
-		require.NoError(t, client.UploadLogs(ctx, resourceLogs))
-		require.NoError(t, client.UploadLogs(ctx, resourceLogs))
-		require.NoError(t, client.UploadLogs(ctx, resourceLogs))
-
-		require.Len(t, errs, 1)
-		want := fmt.Sprintf("%s (%d log records rejected)", msg, n)
-		assert.ErrorContains(t, errs[0], want)
+		assert.ErrorIs(t, client.UploadLogs(ctx, resourceLogs), internal.PartialSuccess{})
+		assert.NoError(t, client.UploadLogs(ctx, resourceLogs))
+		assert.NoError(t, client.UploadLogs(ctx, resourceLogs))
 	})
 }
 
 func TestClientWithHTTPCollectorRespondingPlainText(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	coll, err := newHTTPCollector("", nil, withHTTPCollectorRespondingPlainText())
 	require.NoError(t, err)
 
 	addr := coll.Addr().String()
 	opts := []Option{WithEndpoint(addr), WithInsecure()}
 	cfg := newConfig(opts)
-	client, err := newHTTPClient(cfg)
+	client, err := newHTTPClient(t.Context(), cfg)
 	require.NoError(t, err)
 
 	require.NoError(t, client.uploadLogs(ctx, make([]*lpb.ResourceLogs, 1)))
@@ -581,7 +583,7 @@ func TestClientWithHTTPCollectorRespondingPlainText(t *testing.T) {
 }
 
 func TestNewWithInvalidEndpoint(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	exp, err := New(ctx, WithEndpoint("host:invalid-port"))
 	assert.Error(t, err)
 	assert.Nil(t, exp)
@@ -598,7 +600,7 @@ func TestConfig(t *testing.T) {
 		}
 		opts = append(opts, o...)
 
-		ctx := context.Background()
+		ctx := t.Context()
 		exp, err := New(ctx, opts...)
 		require.NoError(t, err)
 		return exp, coll
@@ -607,7 +609,7 @@ func TestConfig(t *testing.T) {
 	t.Run("WithEndpointURL", func(t *testing.T) {
 		coll, err := newHTTPCollector("", nil)
 		require.NoError(t, err)
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 
 		target := "http://" + coll.Addr().String() + defaultPath
 		exp, err := New(ctx, WithEndpointURL(target))
@@ -623,7 +625,7 @@ func TestConfig(t *testing.T) {
 		key := http.CanonicalHeaderKey("my-custom-header")
 		headers := map[string]string{key: "custom-value"}
 		exp, coll := factoryFunc("", nil, WithHeaders(headers))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		require.NoError(t, exp.Export(ctx, make([]log.Record, 1)))
 		// Ensure everything is flushed.
@@ -644,7 +646,7 @@ func TestConfig(t *testing.T) {
 			WithTimeout(time.Millisecond),
 			WithRetry(RetryConfig{Enabled: false}),
 		)
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		// Push this after Shutdown so the HTTP server doesn't hang.
 		t.Cleanup(func() { close(rCh) })
@@ -655,7 +657,7 @@ func TestConfig(t *testing.T) {
 
 	t.Run("WithCompressionGZip", func(t *testing.T) {
 		exp, coll := factoryFunc("", nil, WithCompression(GzipCompression))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		t.Cleanup(func() { require.NoError(t, exp.Shutdown(ctx)) })
 		assert.NoError(t, exp.Export(ctx, make([]log.Record, 1)))
@@ -691,7 +693,7 @@ func TestConfig(t *testing.T) {
 			MaxInterval:     time.Millisecond,
 			MaxElapsedTime:  time.Minute,
 		}))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		// Push this after Shutdown so the HTTP server doesn't hang.
 		t.Cleanup(func() { close(rCh) })
@@ -710,7 +712,7 @@ func TestConfig(t *testing.T) {
 		exp, coll := factoryFunc("", rCh, WithRetry(RetryConfig{
 			Enabled: false,
 		}))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		// Push this after Shutdown so the HTTP server doesn't hang.
 		t.Cleanup(func() { close(rCh) })
@@ -728,7 +730,7 @@ func TestConfig(t *testing.T) {
 		path := "/prefix/v2/logs"
 		ePt := fmt.Sprintf("http://localhost:0%s", path)
 		exp, coll := factoryFunc(ePt, nil, WithURLPath(path))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		t.Cleanup(func() { require.NoError(t, exp.Shutdown(ctx)) })
 		assert.NoError(t, exp.Export(ctx, make([]log.Record, 1)))
@@ -739,18 +741,28 @@ func TestConfig(t *testing.T) {
 		ePt := "https://localhost:0"
 		tlsCfg := &tls.Config{InsecureSkipVerify: true}
 		exp, coll := factoryFunc(ePt, nil, WithTLSClientConfig(tlsCfg))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		t.Cleanup(func() { require.NoError(t, exp.Shutdown(ctx)) })
 		assert.NoError(t, exp.Export(ctx, make([]log.Record, 1)))
 		assert.Len(t, coll.Collect().Dump(), 1)
 	})
 
+	t.Run("WithInsecureAndTLSClientConfig", func(t *testing.T) {
+		exp, err := New(t.Context(),
+			WithEndpoint("localhost:4318"),
+			WithInsecure(),
+			WithTLSClientConfig(&tls.Config{}),
+		)
+		require.ErrorIs(t, err, errInsecureEndpointWithTLS)
+		assert.Nil(t, exp)
+	})
+
 	t.Run("WithCustomUserAgent", func(t *testing.T) {
 		key := http.CanonicalHeaderKey("user-agent")
 		headers := map[string]string{key: "custom-user-agent"}
 		exp, coll := factoryFunc("", nil, WithHeaders(headers))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		require.NoError(t, exp.Export(ctx, make([]log.Record, 1)))
 		// Ensure everything is flushed.
@@ -768,7 +780,7 @@ func TestConfig(t *testing.T) {
 			r.Header.Set(headerKeySetInProxy, headerValueSetInProxy)
 			return r.URL, nil
 		}))
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
 		require.NoError(t, exp.Export(ctx, make([]log.Record, 1)))
 		// Ensure everything is flushed.
@@ -778,4 +790,327 @@ func TestConfig(t *testing.T) {
 		require.Contains(t, got, headerKeySetInProxy)
 		assert.Equal(t, []string{headerValueSetInProxy}, got[headerKeySetInProxy])
 	})
+
+	t.Run("WithHTTPClient", func(t *testing.T) {
+		headerKeySetInProxy := http.CanonicalHeaderKey("X-Using-Proxy")
+		headerValueSetInProxy := "true"
+		exp, coll := factoryFunc("", nil, WithHTTPClient(&http.Client{
+			Transport: &http.Transport{
+				Proxy: func(r *http.Request) (*url.URL, error) {
+					r.Header.Set(headerKeySetInProxy, headerValueSetInProxy)
+					return r.URL, nil
+				},
+			},
+		}))
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
+		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
+		require.NoError(t, exp.Export(ctx, make([]log.Record, 1)))
+		// Ensure everything is flushed.
+		require.NoError(t, exp.Shutdown(ctx))
+
+		got := coll.Headers()
+		require.Contains(t, got, headerKeySetInProxy)
+		assert.Equal(t, []string{headerValueSetInProxy}, got[headerKeySetInProxy])
+	})
+
+	t.Run("non-retryable errors are propagated", func(t *testing.T) {
+		exporterErr := errors.New("missing required attribute aaaa")
+		rCh := make(chan exportResult, 1)
+		rCh <- exportResult{Err: &httpResponseError{
+			Status: http.StatusBadRequest,
+			Err:    exporterErr,
+		}}
+
+		exp, coll := factoryFunc("", rCh, WithRetry(RetryConfig{
+			Enabled: false,
+		}))
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
+		t.Cleanup(func() { require.NoError(t, coll.Shutdown(ctx)) })
+		// Push this after Shutdown so the HTTP server doesn't hang.
+		t.Cleanup(func() { close(rCh) })
+		t.Cleanup(func() { require.NoError(t, exp.Shutdown(ctx)) })
+		err := exp.Export(ctx, make([]log.Record, 1))
+		assert.ErrorContains(t, err, exporterErr.Error())
+	})
+}
+
+func TestGetBodyCalledOnRedirect(t *testing.T) {
+	// Test that req.GetBody is set correctly, allowing the HTTP transport
+	// to re-send the body on 307 redirects.
+	var mu sync.Mutex
+	var requestBodies [][]byte
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		mu.Lock()
+		requestBodies = append(requestBodies, body)
+		isFirstRequest := len(requestBodies) == 1
+		mu.Unlock()
+
+		if isFirstRequest {
+			w.Header().Set("Location", "/v1/logs/final")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	opts := []Option{WithEndpoint(server.Listener.Addr().String()), WithInsecure()}
+	cfg := newConfig(opts)
+	client, err := newHTTPClient(t.Context(), cfg)
+	require.NoError(t, err)
+
+	exporter, err := newExporter(client, cfg)
+	require.NoError(t, err)
+	ctx := t.Context()
+	defer func() { _ = exporter.Shutdown(ctx) }()
+
+	err = exporter.Export(ctx, make([]log.Record, 1))
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Len(t, requestBodies, 2, "expected 2 requests (original + redirect)")
+	assert.NotEmpty(t, requestBodies[0], "original request body should not be empty")
+	assert.Equal(t, requestBodies[0], requestBodies[1], "redirect body should match original")
+}
+
+// SetExporterID sets the exporter ID counter to v and returns the previous
+// value.
+//
+// This function is useful for testing purposes, allowing you to reset the
+// counter. It should not be used in production code.
+func SetExporterID(v int64) int64 {
+	return exporterN.Swap(v)
+}
+
+func newFactory(t testing.TB) func(rCh <-chan exportResult) (*client, *httpCollector, string) {
+	return func(rCh <-chan exportResult) (*client, *httpCollector, string) {
+		coll, err := newHTTPCollector("", rCh)
+		require.NoError(t, err)
+
+		addr := coll.Addr().String()
+		opts := []Option{WithEndpoint(addr), WithInsecure()}
+		cfg := newConfig(opts)
+		client, err := newHTTPClient(t.Context(), cfg)
+		require.NoError(t, err)
+		return client, coll, addr
+	}
+}
+
+func TestClientInstrumentation(t *testing.T) {
+	// Enable instrumentation for this test.
+	t.Setenv("OTEL_GO_X_OBSERVABILITY", "true")
+
+	// Reset client ID to be a deterministic.
+	const id = 0
+	SetExporterID(id)
+
+	// Save original meter provider and restore at end of test.
+	orig := otel.GetMeterProvider()
+	t.Cleanup(func() {
+		otel.SetMeterProvider(orig)
+	})
+
+	// Create a new meter provider to captrue metrics.
+	reader := metric.NewManualReader()
+	mp := metric.NewMeterProvider(metric.WithReader(reader))
+	otel.SetMeterProvider(mp)
+
+	factory := newFactory(t)
+
+	rCh := make(chan exportResult, 1)
+	rCh <- exportResult{
+		Response: &collogpb.ExportLogsServiceResponse{
+			PartialSuccess: &collogpb.ExportLogsPartialSuccess{
+				RejectedLogRecords: 2,
+				ErrorMessage:       "partially successful",
+			},
+		},
+	}
+
+	client, coll, addr := factory(rCh)
+	t.Cleanup(func() {
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
+		assert.NoError(t, coll.Shutdown(ctx))
+	})
+	assert.ErrorIs(t, client.UploadLogs(t.Context(), resourceLogs), internal.PartialSuccess{})
+
+	var got metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &got))
+
+	baseAttrs := []attribute.KeyValue{
+		semconv.OTelComponentName(observ.GetComponentName(id)),
+		semconv.OTelComponentTypeOtlpHTTPLogExporter,
+	}
+	baseAttrs = append(baseAttrs, observ.ServerAddrAttrs(addr)...)
+
+	want := metricdata.ScopeMetrics{
+		Scope: instrumentation.Scope{
+			Name:      observ.ScopeName,
+			Version:   observ.Version,
+			SchemaURL: semconv.SchemaURL,
+		},
+		Metrics: []metricdata.Metrics{
+			{
+				Name:        otelconv.SDKExporterLogInflight{}.Name(),
+				Description: otelconv.SDKExporterLogInflight{}.Description(),
+				Unit:        otelconv.SDKExporterLogInflight{}.Unit(),
+				Data: metricdata.Sum[int64]{
+					DataPoints: []metricdata.DataPoint[int64]{
+						{Attributes: attribute.NewSet(baseAttrs...)},
+					},
+					Temporality: metricdata.CumulativeTemporality,
+				},
+			},
+			{
+				Name:        otelconv.SDKExporterLogExported{}.Name(),
+				Description: otelconv.SDKExporterLogExported{}.Description(),
+				Unit:        otelconv.SDKExporterLogExported{}.Unit(),
+				Data: metricdata.Sum[int64]{
+					DataPoints: []metricdata.DataPoint[int64]{
+						{Attributes: attribute.NewSet(baseAttrs...)},
+						{Attributes: attribute.NewSet(append(
+							baseAttrs,
+							otelconv.SDKExporterLogExported{}.AttrErrorType("*errors.joinError"),
+						)...)},
+					},
+					Temporality: 0x1,
+					IsMonotonic: true,
+				},
+			},
+			{
+				Name:        otelconv.SDKExporterOperationDuration{}.Name(),
+				Description: otelconv.SDKExporterOperationDuration{}.Description(),
+				Unit:        otelconv.SDKExporterOperationDuration{}.Unit(),
+				Data: metricdata.Histogram[float64]{
+					DataPoints: []metricdata.HistogramDataPoint[float64]{
+						{Attributes: attribute.NewSet(append(
+							baseAttrs,
+							otelconv.SDKExporterOperationDuration{}.AttrErrorType("*errors.joinError"),
+							otelconv.SDKExporterOperationDuration{}.AttrHTTPResponseStatusCode(200),
+						)...)},
+					},
+					Temporality: 0x1,
+				},
+			},
+		},
+	}
+
+	require.Len(t, got.ScopeMetrics, 1)
+	opt := []metricdatatest.Option{
+		metricdatatest.IgnoreTimestamp(),
+		metricdatatest.IgnoreExemplars(),
+		metricdatatest.IgnoreValue(),
+	}
+	metricdatatest.AssertEqual(t, want, got.ScopeMetrics[0], opt...)
+}
+
+func TestResponseBodySizeLimit(t *testing.T) {
+	// Override the limit to 1 byte so any non-empty response body exceeds it.
+	orig := maxResponseBodySize
+	maxResponseBodySize = 1
+	t.Cleanup(func() { maxResponseBodySize = orig })
+
+	// largeBody is larger than the 1-byte limit.
+	largeBody := []byte("xx")
+
+	tests := []struct {
+		name        string
+		status      int
+		contentType string
+	}{
+		{
+			name:        "success response body too large",
+			status:      http.StatusOK,
+			contentType: "application/x-protobuf",
+		},
+		{
+			name:        "error response body too large",
+			status:      http.StatusServiceUnavailable,
+			contentType: "text/plain",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", tc.contentType)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write(largeBody)
+			}))
+			t.Cleanup(srv.Close)
+
+			opts := []Option{
+				WithEndpoint(srv.Listener.Addr().String()),
+				WithInsecure(),
+				WithRetry(RetryConfig{Enabled: false}),
+			}
+			cfg := newConfig(opts)
+			c, err := newHTTPClient(t.Context(), cfg)
+			require.NoError(t, err)
+
+			err = c.UploadLogs(t.Context(), make([]*lpb.ResourceLogs, 1))
+			assert.ErrorContains(t, err, "response body too large")
+			assert.Equal(t, 1, calls, "request must not be retried after body-too-large error")
+		})
+	}
+}
+
+func BenchmarkExporterExportLogs(b *testing.B) {
+	const n = 10
+
+	run := func(b *testing.B) {
+		factory := newFactory(b)
+		client, coll, _ := factory(nil)
+		b.Cleanup(func() {
+			//nolint:usetesting // required to avoid getting a canceled context at cleanup.
+			assert.NoError(b, coll.srv.Shutdown(context.Background()))
+		})
+
+		stubs := make([]*lpb.ResourceLogs, n)
+		for i := range stubs {
+			stubs[i] = &lpb.ResourceLogs{
+				Resource: &rpb.Resource{
+					Attributes: []*cpb.KeyValue{kvSrvName, kvSrvVer},
+				},
+				ScopeLogs: []*lpb.ScopeLogs{
+					{
+						Scope:      scope,
+						LogRecords: logRecords[:(i+1)%(len(logRecords)+1)],
+						SchemaUrl:  semconv.SchemaURL,
+					},
+				},
+				SchemaUrl: semconv.SchemaURL,
+			}
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		var err error
+		for b.Loop() {
+			err = client.UploadLogs(b.Context(), stubs)
+		}
+		_ = err
+	}
+
+	b.Run("Observability", func(b *testing.B) {
+		b.Setenv("OTEL_GO_X_OBSERVABILITY", "true")
+		run(b)
+	})
+
+	b.Run("NoObservability", run)
 }

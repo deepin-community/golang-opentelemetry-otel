@@ -1,6 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// Package oc2otel provides conversion from OpenCensus to OpenTelemetry.
 package oc2otel // import "go.opentelemetry.io/otel/bridge/opencensus/internal/oc2otel"
 
 import (
@@ -20,7 +21,7 @@ func Attributes(attr []octrace.Attribute) []attribute.KeyValue {
 	return otelAttr
 }
 
-func AttributesFromMap(attr map[string]interface{}) []attribute.KeyValue {
+func AttributesFromMap(attr map[string]any) []attribute.KeyValue {
 	otelAttr := make([]attribute.KeyValue, 0, len(attr))
 	for k, v := range attr {
 		otelAttr = append(otelAttr, attribute.KeyValue{
@@ -31,7 +32,7 @@ func AttributesFromMap(attr map[string]interface{}) []attribute.KeyValue {
 	return otelAttr
 }
 
-func AttributeValue(ocval interface{}) attribute.Value {
+func AttributeValue(ocval any) attribute.Value {
 	switch v := ocval.(type) {
 	case bool:
 		return attribute.BoolValue(v)

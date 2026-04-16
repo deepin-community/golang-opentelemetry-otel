@@ -13,11 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 )
 
-func TestMeterProviderConcurrentSafe(t *testing.T) {
+func TestMeterProviderConcurrentSafe(*testing.T) {
 	mp := &meterProvider{}
 	done := make(chan struct{})
 	finish := make(chan struct{})
@@ -38,7 +39,7 @@ func TestMeterProviderConcurrentSafe(t *testing.T) {
 	<-done
 }
 
-var zeroCallback metric.Callback = func(ctx context.Context, or metric.Observer) error {
+var zeroCallback metric.Callback = func(context.Context, metric.Observer) error {
 	return nil
 }
 
@@ -124,7 +125,10 @@ func TestUnregisterConcurrentSafe(t *testing.T) {
 	<-done
 }
 
-func testSetupAllInstrumentTypes(t *testing.T, m metric.Meter) (metric.Float64Counter, metric.Float64ObservableCounter) {
+func testSetupAllInstrumentTypes(
+	t *testing.T,
+	m metric.Meter,
+) (metric.Float64Counter, metric.Float64ObservableCounter) {
 	afcounter, err := m.Float64ObservableCounter("test_Async_Counter")
 	require.NoError(t, err)
 	_, err = m.Float64ObservableUpDownCounter("test_Async_UpDownCounter")
@@ -139,7 +143,7 @@ func testSetupAllInstrumentTypes(t *testing.T, m metric.Meter) (metric.Float64Co
 	_, err = m.Int64ObservableGauge("test_Async_Gauge")
 	assert.NoError(t, err)
 
-	_, err = m.RegisterCallback(func(ctx context.Context, obs metric.Observer) error {
+	_, err = m.RegisterCallback(func(_ context.Context, obs metric.Observer) error {
 		obs.ObserveFloat64(afcounter, 3)
 		return nil
 	}, afcounter)
@@ -214,7 +218,7 @@ func TestMeterProviderDelegatesCalls(t *testing.T) {
 
 	ctr, actr := testSetupAllInstrumentTypes(t, meter)
 
-	ctr.Add(context.Background(), 5)
+	ctr.Add(t.Context(), 5)
 
 	testCollect(t, meter) // This is a hacky way to emulate a read from an exporter
 
@@ -263,7 +267,7 @@ func TestMeterDelegatesCalls(t *testing.T) {
 
 	ctr, actr := testSetupAllInstrumentTypes(t, m)
 
-	ctr.Add(context.Background(), 5)
+	ctr.Add(t.Context(), 5)
 
 	testCollect(t, m) // This is a hacky way to emulate a read from an exporter
 
@@ -306,7 +310,7 @@ func TestMeterDefersDelegations(t *testing.T) {
 
 	ctr, actr := testSetupAllInstrumentTypes(t, m)
 
-	ctr.Add(context.Background(), 5)
+	ctr.Add(t.Context(), 5)
 
 	mp := &testMeterProvider{}
 
@@ -397,17 +401,18 @@ func TestRegistrationDelegation(t *testing.T) {
 }
 
 func TestMeterIdentity(t *testing.T) {
-	type id struct{ name, ver, url string }
+	type id struct{ name, ver, url, attr string }
 
 	ids := []id{
-		{"name-a", "version-a", "url-a"},
-		{"name-a", "version-a", "url-b"},
-		{"name-a", "version-b", "url-a"},
-		{"name-a", "version-b", "url-b"},
-		{"name-b", "version-a", "url-a"},
-		{"name-b", "version-a", "url-b"},
-		{"name-b", "version-b", "url-a"},
-		{"name-b", "version-b", "url-b"},
+		{"name-a", "version-a", "url-a", ""},
+		{"name-a", "version-a", "url-a", "attr"},
+		{"name-a", "version-a", "url-b", ""},
+		{"name-a", "version-b", "url-a", ""},
+		{"name-a", "version-b", "url-b", ""},
+		{"name-b", "version-a", "url-a", ""},
+		{"name-b", "version-a", "url-b", ""},
+		{"name-b", "version-b", "url-a", ""},
+		{"name-b", "version-b", "url-b", ""},
 	}
 
 	provider := &meterProvider{}
@@ -416,6 +421,7 @@ func TestMeterIdentity(t *testing.T) {
 			i.name,
 			metric.WithInstrumentationVersion(i.ver),
 			metric.WithSchemaURL(i.url),
+			metric.WithInstrumentationAttributes(attribute.String("key", i.attr)),
 		)
 	}
 
@@ -436,7 +442,10 @@ type failingRegisterCallbackMeter struct {
 	noop.Meter
 }
 
-func (m *failingRegisterCallbackMeter) RegisterCallback(metric.Callback, ...metric.Observable) (metric.Registration, error) {
+func (*failingRegisterCallbackMeter) RegisterCallback(
+	metric.Callback,
+	...metric.Observable,
+) (metric.Registration, error) {
 	return nil, errors.New("an error occurred")
 }
 

@@ -10,7 +10,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
 
 func mockRuntimeProviders() {
@@ -45,11 +45,9 @@ func TestMapRuntimeOSToSemconvOSType(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		tc := tc
-
 		t.Run(tc.Name, func(t *testing.T) {
 			osTypeAttribute := resource.MapRuntimeOSToSemconvOSType(tc.Goos)
-			require.EqualValues(t, osTypeAttribute, tc.OSType)
+			require.Equal(t, osTypeAttribute, tc.OSType)
 		})
 	}
 }

@@ -5,22 +5,35 @@ package otlptracehttp_test
 
 import (
 	"context"
-	"errors"
+	"crypto/tls"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp/internal"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp/internal/counter"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp/internal/observ"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp/internal/otlptracetest"
-	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/semconv/v1.40.0/otelconv"
 )
 
 const (
@@ -191,7 +204,7 @@ func TestEndToEnd(t *testing.T) {
 			}
 			allOpts = append(allOpts, tc.opts...)
 			client := otlptracehttp.NewClient(allOpts...)
-			ctx := context.Background()
+			ctx := t.Context()
 			exporter, err := otlptrace.New(ctx, client)
 			if assert.NoError(t, err) {
 				defer func() {
@@ -231,7 +244,7 @@ func TestTimeout(t *testing.T) {
 		otlptracehttp.WithTimeout(time.Nanosecond),
 		otlptracehttp.WithRetry(otlptracehttp.RetryConfig{Enabled: false}),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	exporter, err := otlptrace.New(ctx, client)
 	require.NoError(t, err)
 	defer func() {
@@ -241,9 +254,23 @@ func TestTimeout(t *testing.T) {
 	assert.ErrorContains(t, err, "Client.Timeout exceeded while awaiting headers")
 }
 
+func TestInsecureWithTLSClientConfig(t *testing.T) {
+	client := otlptracehttp.NewClient(
+		otlptracehttp.WithEndpoint("localhost:4318"),
+		otlptracehttp.WithInsecure(),
+		otlptracehttp.WithTLSClientConfig(&tls.Config{}),
+	)
+	exp, err := otlptrace.New(t.Context(), client)
+	require.ErrorContains(t, err, "insecure HTTP endpoint cannot use TLS client configuration")
+	assert.Nil(t, exp)
+}
+
 func TestNoRetry(t *testing.T) {
 	mc := runMockCollector(t, mockCollectorConfig{
 		InjectHTTPStatus: []int{http.StatusBadRequest},
+		Partial: &coltracepb.ExportTracePartialSuccess{
+			ErrorMessage: "missing required attribute aaa",
+		},
 	})
 	defer mc.MustStop(t)
 	driver := otlptracehttp.NewClient(
@@ -257,7 +284,7 @@ func TestNoRetry(t *testing.T) {
 			MaxElapsedTime: 0,
 		}),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	exporter, err := otlptrace.New(ctx, driver)
 	require.NoError(t, err)
 	defer func() {
@@ -265,9 +292,14 @@ func TestNoRetry(t *testing.T) {
 	}()
 	err = exporter.ExportSpans(ctx, otlptracetest.SingleReadOnlySpan())
 	assert.Error(t, err)
-	unwrapped := errors.Unwrap(err)
-	assert.Equal(t, fmt.Sprintf("failed to send to http://%s/v1/traces: 400 Bad Request", mc.endpoint), unwrapped.Error())
 	assert.True(t, strings.HasPrefix(err.Error(), "traces export: "))
+
+	msg := fmt.Sprintf("failed to send to http://%s/v1/traces: 400 Bad Request", mc.endpoint)
+	assert.ErrorContains(t, err, msg)
+
+	msg = "missing required attribute aaa"
+	assert.ErrorContains(t, err, msg)
+
 	assert.Empty(t, mc.GetSpans())
 }
 
@@ -279,7 +311,7 @@ func TestEmptyData(t *testing.T) {
 		otlptracehttp.WithEndpoint(mc.Endpoint()),
 		otlptracehttp.WithInsecure(),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	exporter, err := otlptrace.New(ctx, driver)
 	require.NoError(t, err)
 	defer func() {
@@ -299,11 +331,11 @@ func TestCancelledContext(t *testing.T) {
 		otlptracehttp.WithEndpoint(mc.Endpoint()),
 		otlptracehttp.WithInsecure(),
 	)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	exporter, err := otlptrace.New(ctx, driver)
 	require.NoError(t, err)
 	defer func() {
-		assert.NoError(t, exporter.Shutdown(context.Background()))
+		assert.NoError(t, exporter.Shutdown(t.Context()))
 	}()
 	cancel()
 	err = exporter.ExportSpans(ctx, otlptracetest.SingleReadOnlySpan())
@@ -332,11 +364,11 @@ func TestDeadlineContext(t *testing.T) {
 			MaxElapsedTime: 0,
 		}),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	exporter, err := otlptrace.New(ctx, driver)
 	require.NoError(t, err)
 	defer func() {
-		assert.NoError(t, exporter.Shutdown(context.Background()))
+		assert.NoError(t, exporter.Shutdown(t.Context()))
 	}()
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
@@ -366,7 +398,7 @@ func TestStopWhileExportingConcurrentSafe(t *testing.T) {
 			MaxElapsedTime: 0,
 		}),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	exporter, err := otlptrace.New(ctx, driver)
 	require.NoError(t, err)
 	defer func() {
@@ -398,23 +430,16 @@ func TestPartialSuccess(t *testing.T) {
 		otlptracehttp.WithEndpoint(mc.Endpoint()),
 		otlptracehttp.WithInsecure(),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	exporter, err := otlptrace.New(ctx, driver)
 	require.NoError(t, err)
 	defer func() {
-		assert.NoError(t, exporter.Shutdown(context.Background()))
+		assert.NoError(t, exporter.Shutdown(t.Context()))
 	}()
 
-	errs := []error{}
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		errs = append(errs, err)
-	}))
 	err = exporter.ExportSpans(ctx, otlptracetest.SingleReadOnlySpan())
-	assert.NoError(t, err)
-
-	require.Len(t, errs, 1)
-	require.Contains(t, errs[0].Error(), "partially successful")
-	require.Contains(t, errs[0].Error(), "2 spans rejected")
+	want := internal.TracePartialSuccessError(0, "")
+	assert.ErrorIs(t, err, want)
 }
 
 func TestOtherHTTPSuccess(t *testing.T) {
@@ -429,11 +454,11 @@ func TestOtherHTTPSuccess(t *testing.T) {
 				otlptracehttp.WithEndpoint(mc.Endpoint()),
 				otlptracehttp.WithInsecure(),
 			)
-			ctx := context.Background()
+			ctx := t.Context()
 			exporter, err := otlptrace.New(ctx, driver)
 			require.NoError(t, err)
 			defer func() {
-				assert.NoError(t, exporter.Shutdown(context.Background()))
+				assert.NoError(t, exporter.Shutdown(t.Context()))
 			}()
 
 			errs := []error{}
@@ -458,13 +483,270 @@ func TestCollectorRespondingNonProtobufContent(t *testing.T) {
 		otlptracehttp.WithEndpoint(mc.Endpoint()),
 		otlptracehttp.WithInsecure(),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	exporter, err := otlptrace.New(ctx, driver)
 	require.NoError(t, err)
 	defer func() {
-		assert.NoError(t, exporter.Shutdown(context.Background()))
+		assert.NoError(t, exporter.Shutdown(t.Context()))
 	}()
 	err = exporter.ExportSpans(ctx, otlptracetest.SingleReadOnlySpan())
 	assert.NoError(t, err)
 	assert.Len(t, mc.GetSpans(), 1)
+}
+
+func TestClientInstrumentation(t *testing.T) {
+	// Enable instrumentation for this test.
+	t.Setenv("OTEL_GO_X_OBSERVABILITY", "true")
+
+	// Reset client ID to be deterministic
+	const id = 0
+	counter.SetExporterID(id)
+
+	// Save original meter provider and restore at end of test.
+	orig := otel.GetMeterProvider()
+	t.Cleanup(func() { otel.SetMeterProvider(orig) })
+
+	// Create a new meter provider to capture metrics.
+	reader := metric.NewManualReader()
+	mp := metric.NewMeterProvider(metric.WithReader(reader))
+	otel.SetMeterProvider(mp)
+
+	const n, msg = 2, "partially successful"
+	mc := runMockCollector(t, mockCollectorConfig{
+		InjectHTTPStatus: []int{400},
+		Partial: &coltracepb.ExportTracePartialSuccess{
+			RejectedSpans: n,
+			ErrorMessage:  msg,
+		},
+	})
+	t.Cleanup(func() { require.NoError(t, mc.Stop()) })
+
+	driver := otlptracehttp.NewClient(
+		otlptracehttp.WithEndpoint(mc.Endpoint()),
+		otlptracehttp.WithInsecure(),
+	)
+	exporter, err := otlptrace.New(t.Context(), driver)
+	require.NoError(t, err)
+
+	err = exporter.ExportSpans(t.Context(), otlptracetest.SingleReadOnlySpan())
+	assert.Error(t, err)
+
+	require.NoError(t, exporter.Shutdown(t.Context()))
+	var got metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &got))
+
+	attrs := observ.BaseAttrs(id, mc.endpoint)
+
+	want := metricdata.ScopeMetrics{
+		Scope: instrumentation.Scope{
+			Name:      observ.ScopeName,
+			Version:   observ.Version,
+			SchemaURL: observ.SchemaURL,
+		},
+		Metrics: []metricdata.Metrics{
+			{
+				Name:        otelconv.SDKExporterSpanInflight{}.Name(),
+				Description: otelconv.SDKExporterSpanInflight{}.Description(),
+				Unit:        otelconv.SDKExporterSpanInflight{}.Unit(),
+				Data: metricdata.Sum[int64]{
+					DataPoints: []metricdata.DataPoint[int64]{
+						{Attributes: attribute.NewSet(attrs...)},
+					},
+					Temporality: metricdata.CumulativeTemporality,
+				},
+			},
+			{
+				Name:        otelconv.SDKExporterSpanExported{}.Name(),
+				Description: otelconv.SDKExporterSpanExported{}.Description(),
+				Unit:        otelconv.SDKExporterSpanExported{}.Unit(),
+				Data: metricdata.Sum[int64]{
+					DataPoints: []metricdata.DataPoint[int64]{
+						{Attributes: attribute.NewSet(attrs...)},
+						{Attributes: attribute.NewSet(append(
+							attrs,
+							otelconv.SDKExporterSpanExported{}.AttrErrorType("*errors.joinError"),
+						)...)},
+					},
+					Temporality: 0x1,
+					IsMonotonic: true,
+				},
+			},
+			{
+				Name:        otelconv.SDKExporterOperationDuration{}.Name(),
+				Description: otelconv.SDKExporterOperationDuration{}.Description(),
+				Unit:        otelconv.SDKExporterOperationDuration{}.Unit(),
+				Data: metricdata.Histogram[float64]{
+					DataPoints: []metricdata.HistogramDataPoint[float64]{
+						{Attributes: attribute.NewSet(append(
+							attrs,
+							otelconv.SDKExporterOperationDuration{}.AttrErrorType("*errors.joinError"),
+							otelconv.SDKExporterOperationDuration{}.AttrHTTPResponseStatusCode(400),
+						)...)},
+					},
+					Temporality: 0x1,
+				},
+			},
+		},
+	}
+	require.Len(t, got.ScopeMetrics, 1)
+	opt := []metricdatatest.Option{
+		metricdatatest.IgnoreTimestamp(),
+		metricdatatest.IgnoreExemplars(),
+		metricdatatest.IgnoreValue(),
+	}
+	metricdatatest.AssertEqual(t, want, got.ScopeMetrics[0], opt...)
+}
+
+func TestResponseBodySizeLimit(t *testing.T) {
+	// Override the limit to 1 byte so any non-empty response body exceeds it.
+	orig := *otlptracehttp.MaxResponseBodySize
+	*otlptracehttp.MaxResponseBodySize = 1
+	t.Cleanup(func() { *otlptracehttp.MaxResponseBodySize = orig })
+
+	// largeBody is larger than the 1-byte limit.
+	largeBody := []byte("xx")
+
+	tests := []struct {
+		name        string
+		status      int
+		contentType string
+	}{
+		{
+			name:        "success response body too large",
+			status:      http.StatusOK,
+			contentType: "application/x-protobuf",
+		},
+		{
+			name:        "error response body too large",
+			status:      http.StatusServiceUnavailable,
+			contentType: "text/plain",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", tc.contentType)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write(largeBody)
+			}))
+			t.Cleanup(srv.Close)
+
+			client := otlptracehttp.NewClient(
+				otlptracehttp.WithEndpointURL(srv.URL),
+				otlptracehttp.WithInsecure(),
+				otlptracehttp.WithRetry(otlptracehttp.RetryConfig{Enabled: false}),
+			)
+			exporter, err := otlptrace.New(t.Context(), client)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = exporter.Shutdown(t.Context()) })
+
+			err = exporter.ExportSpans(t.Context(), otlptracetest.SingleReadOnlySpan())
+			assert.ErrorContains(t, err, "response body too large")
+			assert.Equal(t, 1, calls, "request must not be retried after body-too-large error")
+		})
+	}
+}
+
+func TestGetBodyCalledOnRedirect(t *testing.T) {
+	// Test that req.GetBody is set correctly, allowing the HTTP transport
+	// to re-send the body on 307 redirects.
+
+	var mu sync.Mutex
+	var requestBodies [][]byte
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		mu.Lock()
+		requestBodies = append(requestBodies, body)
+		isFirstRequest := len(requestBodies) == 1
+		mu.Unlock()
+
+		if isFirstRequest {
+			w.Header().Set("Location", "/v1/traces/final")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	client := otlptracehttp.NewClient(
+		otlptracehttp.WithEndpoint(server.Listener.Addr().String()),
+		otlptracehttp.WithInsecure(),
+	)
+
+	ctx := t.Context()
+	exporter, err := otlptrace.New(ctx, client)
+	require.NoError(t, err)
+	defer func() { _ = exporter.Shutdown(ctx) }()
+
+	err = exporter.ExportSpans(ctx, otlptracetest.SingleReadOnlySpan())
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Len(t, requestBodies, 2, "expected 2 requests (original + redirect)")
+	assert.NotEmpty(t, requestBodies[0], "original request body should not be empty")
+	assert.Equal(t, requestBodies[0], requestBodies[1], "redirect body should match original")
+}
+
+func BenchmarkExporterExportSpans(b *testing.B) {
+	const n = 10
+
+	run := func(b *testing.B) {
+		mc := runMockCollector(b, mockCollectorConfig{
+			Partial: &coltracepb.ExportTracePartialSuccess{
+				RejectedSpans: 5,
+				ErrorMessage:  "partially successful",
+			},
+		})
+		b.Cleanup(func() { require.NoError(b, mc.Stop()) })
+
+		c := otlptracehttp.NewClient(
+			otlptracehttp.WithEndpoint(mc.Endpoint()),
+			otlptracehttp.WithInsecure(),
+		)
+		exp, err := otlptrace.New(b.Context(), c)
+		require.NoError(b, err)
+		b.Cleanup(func() {
+			//nolint:usetesting // required to avoid getting a canceled context at cleanup.
+			assert.NoError(b, exp.Shutdown(context.Background()))
+		})
+
+		stubs := make([]tracetest.SpanStub, n)
+		for i := range stubs {
+			stubs[i].Name = fmt.Sprintf("Span %d", i)
+		}
+		spans := tracetest.SpanStubs(stubs).Snapshots()
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for b.Loop() {
+			err = exp.ExportSpans(b.Context(), spans)
+		}
+		_ = err
+	}
+
+	b.Run("Observability", func(b *testing.B) {
+		b.Setenv("OTEL_GO_X_OBSERVABILITY", "true")
+		run(b)
+	})
+
+	b.Run("NoObservability", func(b *testing.B) {
+		b.Setenv("OTEL_GO_X_OBSERVABILITY", "false")
+		run(b)
+	})
 }

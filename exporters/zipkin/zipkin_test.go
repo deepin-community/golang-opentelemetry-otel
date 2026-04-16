@@ -17,8 +17,6 @@ import (
 	"testing"
 	"time"
 
-	ottest "go.opentelemetry.io/otel/exporters/zipkin/internal/internaltest"
-
 	"github.com/go-logr/logr/funcr"
 	zkmodel "github.com/openzipkin/zipkin-go/model"
 	"github.com/stretchr/testify/assert"
@@ -28,7 +26,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -76,13 +74,7 @@ func TestNewRawExporterCollectorURLFromEnv(t *testing.T) {
 	)
 
 	expectedEndpoint := "http://localhost:19411/api/v2/spans"
-	envStore, err := ottest.SetEnvVariables(map[string]string{
-		envEndpoint: expectedEndpoint,
-	})
-	assert.NoError(t, err)
-	defer func() {
-		require.NoError(t, envStore.Restore())
-	}()
+	t.Setenv(envEndpoint, expectedEndpoint)
 
 	exp, err = New("")
 
@@ -106,7 +98,7 @@ func startMockZipkinCollector(t *testing.T) *mockZipkinCollector {
 		t:       t,
 		closing: false,
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	collector.url = fmt.Sprintf("http://%s", listener.Addr().String())
 	server := &http.Server{
@@ -155,7 +147,7 @@ func (c *mockZipkinCollector) Close() {
 	c.closing = true
 	server := c.server
 	c.server = nil
-	require.NoError(c.t, server.Shutdown(context.Background()))
+	require.NoError(c.t, server.Shutdown(c.t.Context()))
 	c.wg.Wait()
 }
 
@@ -179,7 +171,7 @@ type logStore struct {
 }
 
 func (s *logStore) Write(p []byte) (n int, err error) {
-	msg := (string)(p)
+	msg := string(p)
 	if s.T != nil {
 		s.T.Logf("%s", msg)
 	}
@@ -201,8 +193,11 @@ func TestExportSpans(t *testing.T) {
 		// parent
 		{
 			SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
-				TraceID: trace.TraceID{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
-				SpanID:  trace.SpanID{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
+				TraceID: trace.TraceID{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+				},
+				SpanID: trace.SpanID{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
 			}),
 			SpanKind:   trace.SpanKindServer,
 			Name:       "foo",
@@ -219,12 +214,18 @@ func TestExportSpans(t *testing.T) {
 		// child
 		{
 			SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
-				TraceID: trace.TraceID{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
-				SpanID:  trace.SpanID{0xDF, 0xDE, 0xDD, 0xDC, 0xDB, 0xDA, 0xD9, 0xD8},
+				TraceID: trace.TraceID{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+				},
+				SpanID: trace.SpanID{0xDF, 0xDE, 0xDD, 0xDC, 0xDB, 0xDA, 0xD9, 0xD8},
 			}),
 			Parent: trace.NewSpanContext(trace.SpanContextConfig{
-				TraceID: trace.TraceID{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
-				SpanID:  trace.SpanID{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
+				TraceID: trace.TraceID{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+				},
+				SpanID: trace.SpanID{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
 			}),
 			SpanKind:   trace.SpanKindServer,
 			Name:       "bar",
@@ -308,7 +309,7 @@ func TestExportSpans(t *testing.T) {
 	logger := logStoreLogger(ls)
 	exporter, err := New(collector.url, WithLogger(logger))
 	require.NoError(t, err)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.Empty(t, ls.Messages)
 	require.NoError(t, exporter.ExportSpans(ctx, spans[0:1]))
 	require.Len(t, ls.Messages, 1)
@@ -328,7 +329,7 @@ func TestExportSpans(t *testing.T) {
 }
 
 func TestExporterShutdownHonorsTimeout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 1*time.Minute)
 	defer cancel()
 
 	exp, err := New("")
@@ -341,7 +342,7 @@ func TestExporterShutdownHonorsTimeout(t *testing.T) {
 }
 
 func TestExporterShutdownHonorsCancel(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 1*time.Minute)
 	defer cancel()
 
 	exp, err := New("")
@@ -355,17 +356,17 @@ func TestExporterShutdownHonorsCancel(t *testing.T) {
 func TestErrorOnExportShutdownExporter(t *testing.T) {
 	exp, err := New("")
 	require.NoError(t, err)
-	assert.NoError(t, exp.Shutdown(context.Background()))
-	assert.NoError(t, exp.ExportSpans(context.Background(), nil))
+	assert.NoError(t, exp.Shutdown(t.Context()))
+	assert.NoError(t, exp.ExportSpans(t.Context(), nil))
 }
 
 func TestLogrFormatting(t *testing.T) {
 	format := "string %q, int %d"
-	args := []interface{}{"s", 1}
+	args := []any{"s", 1}
 
 	var buf bytes.Buffer
 	l := funcr.New(func(prefix, args string) {
-		_, _ = buf.WriteString(fmt.Sprint(prefix, args))
+		_, _ = fmt.Fprint(&buf, prefix, args)
 	}, funcr.Options{})
 	exp, err := New("", WithLogr(l))
 	require.NoError(t, err)
@@ -394,8 +395,11 @@ func TestWithHeaders(t *testing.T) {
 	spans := tracetest.SpanStubs{
 		{
 			SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
-				TraceID: trace.TraceID{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
-				SpanID:  trace.SpanID{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
+				TraceID: trace.TraceID{
+					0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+					0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+				},
+				SpanID: trace.SpanID{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
 			}),
 		},
 	}.Snapshots()
@@ -415,9 +419,44 @@ func TestWithHeaders(t *testing.T) {
 		headers: headers,
 	}
 
-	_ = e.ExportSpans(context.Background(), spans)
+	_ = e.ExportSpans(t.Context(), spans)
 
 	assert.Equal(t, headers["host"], req.Host)
 	assert.Equal(t, headers["name1"], req.Header.Get("name1"))
 	assert.Equal(t, headers["name2"], req.Header.Get("name2"))
+}
+
+func TestWithClient(t *testing.T) {
+	customClient := &http.Client{
+		Timeout: 1000,
+	}
+
+	testcases := []struct {
+		name        string
+		client      *http.Client
+		want        *http.Client
+		description string
+	}{
+		{
+			name:        "nil client",
+			client:      nil,
+			want:        http.DefaultClient,
+			description: "should fall back to default client when nil is provided",
+		},
+		{
+			name:        "custom client",
+			client:      customClient,
+			want:        customClient,
+			description: "should use provided custom client",
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			exp, err := New("", WithClient(tc.client))
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, exp.client)
+		})
+	}
 }

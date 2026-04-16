@@ -4,7 +4,6 @@
 package resource_test
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -18,7 +17,7 @@ func TestBuiltinStringDetector(t *testing.T) {
 	E := fmt.Errorf("no K")
 	res, err := resource.StringDetector("", attribute.Key("K"), func() (string, error) {
 		return "", E
-	}).Detect(context.Background())
+	}).Detect(t.Context())
 	require.ErrorIs(t, err, E)
 	require.NotEqual(t, E, err)
 	require.Nil(t, res)
@@ -48,7 +47,7 @@ func TestStringDetectorErrors(t *testing.T) {
 
 	for _, test := range tests {
 		res, err := resource.New(
-			context.Background(),
+			t.Context(),
 			resource.WithAttributes(attribute.String("A", "B")),
 			resource.WithDetectors(test.s),
 		)
@@ -60,6 +59,6 @@ func TestStringDetectorErrors(t *testing.T) {
 		for _, kv := range res.Attributes() {
 			m[string(kv.Key)] = kv.Value.Emit()
 		}
-		require.EqualValues(t, map[string]string{"A": "B"}, m)
+		require.Equal(t, map[string]string{"A": "B"}, m)
 	}
 }

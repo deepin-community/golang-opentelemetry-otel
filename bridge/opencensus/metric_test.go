@@ -4,7 +4,6 @@
 package opencensus // import "go.opentelemetry.io/otel/bridge/opencensus"
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -127,13 +126,13 @@ func TestMetricProducer(t *testing.T) {
 			fakeProducer := &fakeOCProducer{metrics: tc.input}
 			metricproducer.GlobalManager().AddProducer(fakeProducer)
 			defer metricproducer.GlobalManager().DeleteProducer(fakeProducer)
-			output, err := NewMetricProducer().Produce(context.Background())
+			output, err := NewMetricProducer().Produce(t.Context())
 			if tc.expectErr {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 			}
-			require.Equal(t, len(output), len(tc.expected))
+			require.Len(t, tc.expected, len(output))
 			for i := range output {
 				metricdatatest.AssertEqual(t, tc.expected[i], output[i])
 			}

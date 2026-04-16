@@ -90,7 +90,7 @@ func testConfAttr(newConf func(...MeasurementOption) attrConf) func(t *testing.T
 	}
 }
 
-func TestWithAttributesConcurrentSafe(t *testing.T) {
+func TestWithAttributesConcurrentSafe(*testing.T) {
 	attrs := []attribute.KeyValue{
 		attribute.String("user", "Alice"),
 		attribute.Bool("admin", true),
@@ -98,44 +98,32 @@ func TestWithAttributesConcurrentSafe(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		opt := []AddOption{WithAttributes(attrs...)}
 		_ = NewAddConfig(opt)
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		opt := []AddOption{WithAttributes(attrs...)}
 		_ = NewAddConfig(opt)
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		opt := []RecordOption{WithAttributes(attrs...)}
 		_ = NewRecordConfig(opt)
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		opt := []RecordOption{WithAttributes(attrs...)}
 		_ = NewRecordConfig(opt)
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		opt := []ObserveOption{WithAttributes(attrs...)}
 		_ = NewObserveConfig(opt)
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		opt := []ObserveOption{WithAttributes(attrs...)}
 		_ = NewObserveConfig(opt)
-	}()
+	})
 
 	wg.Wait()
 }
