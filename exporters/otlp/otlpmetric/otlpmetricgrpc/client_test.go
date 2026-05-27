@@ -13,6 +13,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 
@@ -161,7 +162,7 @@ func TestClient(t *testing.T) {
 		coll, err := otest.NewGRPCCollector("", rCh)
 		require.NoError(t, err)
 
-		ctx := context.Background()
+		ctx := t.Context()
 		addr := coll.Addr().String()
 		opts := []Option{WithEndpoint(addr), WithInsecure()}
 		cfg := oconf.NewGRPCConfig(asGRPCOptions(opts)...)
@@ -178,7 +179,7 @@ func TestConfig(t *testing.T) {
 		coll, err := otest.NewGRPCCollector("", rCh)
 		require.NoError(t, err)
 
-		ctx := context.Background()
+		ctx := t.Context()
 		opts := append([]Option{
 			WithEndpoint(coll.Addr().String()),
 			WithInsecure(),
@@ -193,7 +194,7 @@ func TestConfig(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(coll.Shutdown)
 
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		exp, err := New(ctx, WithEndpointURL("http://"+coll.Addr().String()))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, exp.Shutdown(ctx)) })
@@ -207,7 +208,10 @@ func TestConfig(t *testing.T) {
 		headers := map[string]string{key: "custom-value"}
 		exp, coll := factoryFunc(nil, WithHeaders(headers))
 		t.Cleanup(coll.Shutdown)
-		ctx := context.Background()
+
+		ctx := t.Context()
+		additionalKey := "additional-custom-header"
+		ctx = metadata.AppendToOutgoingContext(ctx, additionalKey, "additional-value")
 		require.NoError(t, exp.Export(ctx, &metricdata.ResourceMetrics{}))
 		// Ensure everything is flushed.
 		require.NoError(t, exp.Shutdown(ctx))
@@ -215,6 +219,7 @@ func TestConfig(t *testing.T) {
 		got := coll.Headers()
 		require.Regexp(t, "OTel Go OTLP over gRPC metrics exporter/[01]\\..*", got)
 		require.Contains(t, got, key)
+		require.Contains(t, got, additionalKey)
 		assert.Equal(t, []string{headers[key]}, got[key])
 	})
 
@@ -228,10 +233,10 @@ func TestConfig(t *testing.T) {
 			WithRetry(RetryConfig{Enabled: false}),
 		)
 		t.Cleanup(coll.Shutdown)
-		ctx := context.Background()
+		ctx := context.Background() //nolint:usetesting // required to avoid getting a canceled context at cleanup.
 		t.Cleanup(func() { require.NoError(t, exp.Shutdown(ctx)) })
 		err := exp.Export(ctx, &metricdata.ResourceMetrics{})
-		assert.ErrorContains(t, err, context.DeadlineExceeded.Error())
+		assert.ErrorContains(t, err, "DeadlineExceeded")
 	})
 
 	t.Run("WithCustomUserAgent", func(t *testing.T) {
@@ -239,7 +244,7 @@ func TestConfig(t *testing.T) {
 		customerUserAgent := "custom-user-agent"
 		exp, coll := factoryFunc(nil, WithDialOption(grpc.WithUserAgent(customerUserAgent)))
 		t.Cleanup(coll.Shutdown)
-		ctx := context.Background()
+		ctx := t.Context()
 		require.NoError(t, exp.Export(ctx, &metricdata.ResourceMetrics{}))
 		// Ensure everything is flushed.
 		require.NoError(t, exp.Shutdown(ctx))

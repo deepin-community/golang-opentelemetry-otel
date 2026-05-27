@@ -11,16 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/sdk/instrumentation"
-	"go.opentelemetry.io/otel/sdk/log/logtest"
-	"go.opentelemetry.io/otel/sdk/resource"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/log/logtest"
+	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -75,22 +74,22 @@ func TestExporter(t *testing.T) {
 			record := getRecord(now)
 
 			// Export a record
-			err = exporter.Export(context.Background(), []sdklog.Record{record})
+			err = exporter.Export(t.Context(), []sdklog.Record{record})
 			assert.NoError(t, err)
 
 			// Check the writer
 			assert.Equal(t, tc.want, buf.String())
 
 			// Flush the exporter
-			err = exporter.ForceFlush(context.Background())
+			err = exporter.ForceFlush(t.Context())
 			assert.NoError(t, err)
 
 			// Shutdown the exporter
-			err = exporter.Shutdown(context.Background())
+			err = exporter.Shutdown(t.Context())
 			assert.NoError(t, err)
 
 			// Export a record after shutdown, this should not be written
-			err = exporter.Export(context.Background(), []sdklog.Record{record})
+			err = exporter.Export(t.Context(), []sdklog.Record{record})
 			assert.NoError(t, err)
 
 			// Check the writer
@@ -116,42 +115,42 @@ func TestExporterExport(t *testing.T) {
 		{
 			name:       "default",
 			options:    []Option{},
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			records:    records,
 			wantResult: getJSONs(&now),
 		},
 		{
 			name:       "NoRecords",
 			options:    []Option{},
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			records:    nil,
 			wantResult: "",
 		},
 		{
 			name:       "WithPrettyPrint",
 			options:    []Option{WithPrettyPrint()},
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			records:    records,
 			wantResult: getPrettyJSONs(&now),
 		},
 		{
 			name:       "WithoutTimestamps",
 			options:    []Option{WithoutTimestamps()},
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			records:    records,
 			wantResult: getJSONs(nil),
 		},
 		{
 			name:       "WithoutTimestamps and WithPrettyPrint",
 			options:    []Option{WithoutTimestamps(), WithPrettyPrint()},
-			ctx:        context.Background(),
+			ctx:        t.Context(),
 			records:    records,
 			wantResult: getPrettyJSONs(nil),
 		},
 		{
 			name: "WithCanceledContext",
 			ctx: func() context.Context {
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithCancel(t.Context())
 				cancel()
 				return ctx
 			}(),
@@ -183,7 +182,7 @@ func getJSON(now *time.Time) string {
 		timestamps = "\"Timestamp\":" + string(serializedNow) + ",\"ObservedTimestamp\":" + string(serializedNow) + ","
 	}
 
-	return "{" + timestamps + "\"Severity\":9,\"SeverityText\":\"INFO\",\"Body\":{\"Type\":\"String\",\"Value\":\"test\"},\"Attributes\":[{\"Key\":\"key\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key2\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key3\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key4\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key5\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"bool\",\"Value\":{\"Type\":\"Bool\",\"Value\":true}}],\"TraceID\":\"0102030405060708090a0b0c0d0e0f10\",\"SpanID\":\"0102030405060708\",\"TraceFlags\":\"01\",\"Resource\":[{\"Key\":\"foo\",\"Value\":{\"Type\":\"STRING\",\"Value\":\"bar\"}}],\"Scope\":{\"Name\":\"name\",\"Version\":\"version\",\"SchemaURL\":\"https://example.com/custom-schema\"},\"DroppedAttributes\":10}\n"
+	return "{" + timestamps + "\"EventName\":\"testing.event\",\"Severity\":9,\"SeverityText\":\"INFO\",\"Body\":{\"Type\":\"String\",\"Value\":\"test\"},\"Attributes\":[{\"Key\":\"key\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key2\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key3\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key4\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"key5\",\"Value\":{\"Type\":\"String\",\"Value\":\"value\"}},{\"Key\":\"bool\",\"Value\":{\"Type\":\"Bool\",\"Value\":true}}],\"TraceID\":\"0102030405060708090a0b0c0d0e0f10\",\"SpanID\":\"0102030405060708\",\"TraceFlags\":\"01\",\"Resource\":[{\"Key\":\"foo\",\"Value\":{\"Type\":\"STRING\",\"Value\":\"bar\"}}],\"Scope\":{\"Name\":\"name\",\"Version\":\"version\",\"SchemaURL\":\"https://example.com/custom-schema\",\"Attributes\":{}},\"DroppedAttributes\":10}\n"
 }
 
 func getJSONs(now *time.Time) string {
@@ -194,10 +193,15 @@ func getPrettyJSON(now *time.Time) string {
 	var timestamps string
 	if now != nil {
 		serializedNow, _ := json.Marshal(now)
-		timestamps = "\n\t\"Timestamp\": " + string(serializedNow) + ",\n\t\"ObservedTimestamp\": " + string(serializedNow) + ","
+		timestamps = "\n\t\"Timestamp\": " + string(
+			serializedNow,
+		) + ",\n\t\"ObservedTimestamp\": " + string(
+			serializedNow,
+		) + ","
 	}
 
 	return `{` + timestamps + `
+	"EventName": "testing.event",
 	"Severity": 9,
 	"SeverityText": "INFO",
 	"Body": {
@@ -263,7 +267,8 @@ func getPrettyJSON(now *time.Time) string {
 	"Scope": {
 		"Name": "name",
 		"Version": "version",
-		"SchemaURL": "https://example.com/custom-schema"
+		"SchemaURL": "https://example.com/custom-schema",
+		"Attributes": {}
 	},
 	"DroppedAttributes": 10
 }
@@ -278,14 +283,14 @@ func TestExporterShutdown(t *testing.T) {
 	exporter, err := New()
 	assert.NoError(t, err)
 
-	assert.NoError(t, exporter.Shutdown(context.Background()))
+	assert.NoError(t, exporter.Shutdown(t.Context()))
 }
 
 func TestExporterForceFlush(t *testing.T) {
 	exporter, err := New()
 	assert.NoError(t, err)
 
-	assert.NoError(t, exporter.ForceFlush(context.Background()))
+	assert.NoError(t, exporter.ForceFlush(t.Context()))
 }
 
 func getRecord(now time.Time) sdklog.Record {
@@ -293,6 +298,7 @@ func getRecord(now time.Time) sdklog.Record {
 	spanID, _ := trace.SpanIDFromHex("0102030405060708")
 
 	rf := logtest.RecordFactory{
+		EventName:         "testing.event",
 		Timestamp:         now,
 		ObservedTimestamp: now,
 		Severity:          log.SeverityInfo1,
@@ -315,8 +321,12 @@ func getRecord(now time.Time) sdklog.Record {
 			"https://example.com/custom-resource-schema",
 			attribute.String("foo", "bar"),
 		),
-		InstrumentationScope: &instrumentation.Scope{Name: "name", Version: "version", SchemaURL: "https://example.com/custom-schema"},
-		DroppedAttributes:    10,
+		InstrumentationScope: &instrumentation.Scope{
+			Name:      "name",
+			Version:   "version",
+			SchemaURL: "https://example.com/custom-schema",
+		},
+		DroppedAttributes: 10,
 	}
 
 	return rf.NewRecord()
@@ -350,14 +360,14 @@ func TestExporterConcurrentSafe(t *testing.T) {
 			const goroutines = 10
 			var wg sync.WaitGroup
 			wg.Add(goroutines)
-			for i := 0; i < goroutines; i++ {
+			for range goroutines {
 				go func() {
 					defer wg.Done()
-					err := exporter.Export(context.Background(), []sdklog.Record{{}})
+					err := exporter.Export(t.Context(), []sdklog.Record{{}})
 					assert.NoError(t, err)
-					err = exporter.ForceFlush(context.Background())
+					err = exporter.ForceFlush(t.Context())
 					assert.NoError(t, err)
-					err = exporter.Shutdown(context.Background())
+					err = exporter.Shutdown(t.Context())
 					assert.NoError(t, err)
 				}()
 			}

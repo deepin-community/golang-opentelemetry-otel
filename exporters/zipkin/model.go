@@ -20,7 +20,8 @@ import (
 	semconv120 "go.opentelemetry.io/otel/semconv/v1.20.0"
 	semconv121 "go.opentelemetry.io/otel/semconv/v1.21.0"
 	semconv125 "go.opentelemetry.io/otel/semconv/v1.25.0"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv138 "go.opentelemetry.io/otel/semconv/v1.38.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -148,13 +149,13 @@ func toZipkinAnnotations(events []tracesdk.Event) []zkmodel.Annotation {
 }
 
 func attributesToJSONMapString(attributes []attribute.KeyValue) string {
-	m := make(map[string]interface{}, len(attributes))
+	m := make(map[string]any, len(attributes))
 	for _, a := range attributes {
-		m[(string)(a.Key)] = a.Value.AsInterface()
+		m[string(a.Key)] = a.Value.AsInterface()
 	}
 	// if an error happens, the result will be an empty string
 	jsonBytes, _ := json.Marshal(m)
-	return (string)(jsonBytes)
+	return string(jsonBytes)
 }
 
 // attributeToStringPair serializes each attribute to a string pair.
@@ -163,18 +164,18 @@ func attributeToStringPair(kv attribute.KeyValue) (string, string) {
 	// For slice attributes, serialize as JSON list string.
 	case attribute.BOOLSLICE:
 		data, _ := json.Marshal(kv.Value.AsBoolSlice())
-		return (string)(kv.Key), (string)(data)
+		return string(kv.Key), string(data)
 	case attribute.INT64SLICE:
 		data, _ := json.Marshal(kv.Value.AsInt64Slice())
-		return (string)(kv.Key), (string)(data)
+		return string(kv.Key), string(data)
 	case attribute.FLOAT64SLICE:
 		data, _ := json.Marshal(kv.Value.AsFloat64Slice())
-		return (string)(kv.Key), (string)(data)
+		return string(kv.Key), string(data)
 	case attribute.STRINGSLICE:
 		data, _ := json.Marshal(kv.Value.AsStringSlice())
-		return (string)(kv.Key), (string)(data)
+		return string(kv.Key), string(data)
 	default:
-		return (string)(kv.Key), kv.Value.Emit()
+		return string(kv.Key), kv.Value.Emit()
 	}
 }
 
@@ -227,7 +228,7 @@ func toZipkinTags(data tracesdk.ReadOnlySpan) map[string]string {
 // Rank determines selection order for remote endpoint. See the specification
 // https://github.com/open-telemetry/opentelemetry-specification/blob/v1.28.0/specification/trace/sdk_exporters/zipkin.md#otlp---zipkin
 var remoteEndpointKeyRank = map[attribute.Key]int{
-	semconv.PeerServiceKey:            1,
+	semconv138.PeerServiceKey:         1,
 	semconv.ServerAddressKey:          2,
 	semconv120.NetPeerNameKey:         3,
 	semconv.NetworkPeerAddressKey:     4,

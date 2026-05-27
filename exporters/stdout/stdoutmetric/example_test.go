@@ -15,7 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
 
 var (
@@ -184,7 +184,8 @@ func Example() {
 	//       "Scope": {
 	//         "Name": "example",
 	//         "Version": "0.0.1",
-	//         "SchemaURL": ""
+	//         "SchemaURL": "",
+	//         "Attributes": null
 	//       },
 	//       "Metrics": [
 	//         {

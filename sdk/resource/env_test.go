@@ -4,7 +4,6 @@
 package resource
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -12,46 +11,33 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/otel/attribute"
-	ottest "go.opentelemetry.io/otel/sdk/internal/internaltest"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
 
 func TestDetectOnePair(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		resourceAttrKey: "key=value",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
+	t.Setenv(resourceAttrKey, "key=value")
 
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, NewSchemaless(attribute.String("key", "value")), res)
 }
 
 func TestDetectURIEncodingOnePair(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		resourceAttrKey: "key=x+y+z?q=123",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
+	t.Setenv(resourceAttrKey, "key=x+y+z?q=123")
 
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, NewSchemaless(attribute.String("key", "x+y+z?q=123")), res)
 }
 
 func TestDetectMultiPairs(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		"x":             "1",
-		resourceAttrKey: "key=value, k = v , a= x, a=z, b=c%2Fd",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
+	t.Setenv("x", "1")
+	t.Setenv(resourceAttrKey, "key=value, k = v , a= x, a=z, b=c%2Fd")
 
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, NewSchemaless(
 		attribute.String("key", "value"),
@@ -63,15 +49,10 @@ func TestDetectMultiPairs(t *testing.T) {
 }
 
 func TestDetectURIEncodingMultiPairs(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		"x":             "1",
-		resourceAttrKey: "key=x+y+z,namespace=localhost/test&verify",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
-
+	t.Setenv("x", "1")
+	t.Setenv(resourceAttrKey, "key=x+y+z,namespace=localhost/test&verify")
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, NewSchemaless(
 		attribute.String("key", "x+y+z"),
@@ -80,26 +61,17 @@ func TestDetectURIEncodingMultiPairs(t *testing.T) {
 }
 
 func TestEmpty(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		resourceAttrKey: "   ",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
-
+	t.Setenv(resourceAttrKey, "   ")
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, Empty(), res)
 }
 
 func TestNoResourceAttributesSet(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		svcNameKey: "bar",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
+	t.Setenv(svcNameKey, "bar")
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, res, NewSchemaless(
 		semconv.ServiceName("bar"),
@@ -107,14 +79,9 @@ func TestNoResourceAttributesSet(t *testing.T) {
 }
 
 func TestMissingKeyError(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		resourceAttrKey: "key=value,key",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
-
+	t.Setenv(resourceAttrKey, "key=value,key")
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	assert.Error(t, err)
 	assert.Equal(t, err, fmt.Errorf("%w: %v", errMissingValue, "[key]"))
 	assert.Equal(t, res, NewSchemaless(
@@ -123,14 +90,9 @@ func TestMissingKeyError(t *testing.T) {
 }
 
 func TestInvalidPercentDecoding(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		resourceAttrKey: "key=%invalid",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
-
+	t.Setenv(resourceAttrKey, "key=%invalid")
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	assert.NoError(t, err)
 	assert.Equal(t, NewSchemaless(
 		attribute.String("key", "%invalid"),
@@ -138,15 +100,10 @@ func TestInvalidPercentDecoding(t *testing.T) {
 }
 
 func TestDetectServiceNameFromEnv(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		resourceAttrKey: "key=value,service.name=foo",
-		svcNameKey:      "bar",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
-
+	t.Setenv(resourceAttrKey, "key=value,service.name=foo")
+	t.Setenv(svcNameKey, "bar")
 	detector := &fromEnv{}
-	res, err := detector.Detect(context.Background())
+	res, err := detector.Detect(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, res, NewSchemaless(
 		attribute.String("key", "value"),

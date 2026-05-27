@@ -6,6 +6,7 @@ package aggregate // import "go.opentelemetry.io/otel/sdk/metric/internal/aggreg
 import (
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,8 +73,8 @@ func (c *clock) Register() (unregister func()) {
 	return func() { now = orig }
 }
 
-func dropExemplars[N int64 | float64]() FilteredExemplarReservoir[N] {
-	return DropReservoir[N]()
+func dropExemplars[N int64 | float64](attr attribute.Set) FilteredExemplarReservoir[N] {
+	return dropReservoir[N](attr)
 }
 
 func TestBuilderFilter(t *testing.T) {
@@ -95,7 +96,7 @@ func testBuilderFilter[N int64 | float64]() func(t *testing.T) {
 					assert.Equal(t, wantF, f, "measured incorrect filtered attributes")
 					assert.ElementsMatch(t, wantD, d, "measured incorrect dropped attributes")
 				})
-				meas(context.Background(), value, attr)
+				meas(t.Context(), value, attr)
 			}
 		}
 
@@ -138,6 +139,95 @@ func test[N int64 | float64](meas Measure[N], comp ComputeAggregation, steps []t
 	}
 }
 
+func getConcurrentVals[N int64 | float64]() []N {
+	// Keep length of v in sync with concurrentNumRecords
+	// and expectedConcurrentSum.
+	switch any(*new(N)).(type) {
+	case float64:
+		v := []float64{2.5, 6.1, 4.4, 10.0, 22.0, -3.5, -6.5, 3.0, -6.0}
+		return any(v).([]N)
+	default:
+		v := []int64{2, 6, 4, 10, 22, -3, -6, 3, -6}
+		return any(v).([]N)
+	}
+}
+
+const (
+	concurrentValsSum       = 32
+	concurrentNumGoroutines = 10
+	concurrentNumRecords    = 90 // Multiple of 9 (length of values sequences)
+	expectedConcurrentCount = uint64(concurrentNumGoroutines * concurrentNumRecords)
+)
+
+func expectedConcurrentSum[N int64 | float64]() N {
+	return N(int64(concurrentNumGoroutines) * int64(concurrentNumRecords/9) * concurrentValsSum)
+}
+
+// testAggregationConcurrentSafe provides a unified stress test for all generic aggregators
+// by generating high contention, cardinality limit overflow, and validating exact results.
+func testAggregationConcurrentSafe[N int64 | float64](
+	meas Measure[N],
+	comp ComputeAggregation,
+	validate func(t *testing.T, aggs []metricdata.Aggregation),
+) func(*testing.T) {
+	return func(t *testing.T) {
+		t.Helper()
+
+		ctx := t.Context()
+		var wg sync.WaitGroup
+
+		// Use 10 different attribute sets to force overflow on the AggregationLimit
+		// which is typically set to 3.
+		attrs := make([]attribute.Set, concurrentNumGoroutines)
+		for i := range attrs {
+			attrs[i] = attribute.NewSet(attribute.String(keyUser, strconv.Itoa(i)))
+		}
+
+		vals := getConcurrentVals[N]()
+
+		wg.Add(concurrentNumGoroutines)
+		for i := range concurrentNumGoroutines {
+			go func(id int) {
+				defer wg.Done()
+				// Each goroutine records to a distinct attribute set
+				attr := attrs[id]
+
+				for j := range concurrentNumRecords {
+					meas(ctx, vals[j%len(vals)], attr)
+				}
+			}(i)
+		}
+
+		var results []metricdata.Aggregation
+
+		// Run computation concurrently with measurements to stress hot/cold swaps
+		wg.Go(func() {
+			for range concurrentNumRecords {
+				got := new(metricdata.Aggregation)
+				comp(got)
+				results = append(results, *got)
+			}
+		})
+
+		wg.Wait()
+
+		// Final flush to get final values
+		got := new(metricdata.Aggregation)
+		comp(got)
+		results = append(results, *got)
+
+		validate(t, results)
+	}
+}
+
+func assertSumEqual[N int64 | float64](t *testing.T, expected, actual N) {
+	if _, ok := any(*new(N)).(float64); ok {
+		assert.InDelta(t, float64(expected), float64(actual), 0.0001)
+	} else {
+		assert.Equal(t, expected, actual)
+	}
+}
+
 func benchmarkAggregate[N int64 | float64](factory func() (Measure[N], ComputeAggregation)) func(*testing.B) {
 	counts := []int{1, 10, 100}
 	return func(b *testing.B) {
@@ -152,7 +242,7 @@ func benchmarkAggregate[N int64 | float64](factory func() (Measure[N], ComputeAg
 var bmarkRes metricdata.Aggregation
 
 func benchmarkAggregateN[N int64 | float64](b *testing.B, factory func() (Measure[N], ComputeAggregation), count int) {
-	ctx := context.Background()
+	ctx := b.Context()
 	attrs := make([]attribute.Set, count)
 	for i := range attrs {
 		attrs[i] = attribute.NewSet(attribute.Int("value", i))

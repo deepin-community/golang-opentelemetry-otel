@@ -10,13 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"go.opentelemetry.io/otel/trace"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type tlsOption int
@@ -74,7 +73,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "stripped, tcp",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -90,7 +89,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "stripped, udp",
 			network:    "udp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -106,7 +105,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "stripped, ip",
 			network:    "ip",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -122,7 +121,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "stripped, unix",
 			network:    "unix",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -138,7 +137,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "stripped, other",
 			network:    "nih",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -154,7 +153,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote ipv4 and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -172,7 +171,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote ipv6 and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "[fe80::0202:b3ff:fe1e:8329]:56",
@@ -190,7 +189,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote ipv4-in-v6 and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "[::ffff:192.168.0.1]:56",
@@ -208,7 +207,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote name and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "example.com:56",
@@ -226,7 +225,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote ipv4 only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4",
@@ -243,7 +242,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote ipv6 only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "fe80::0202:b3ff:fe1e:8329",
@@ -260,7 +259,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote ipv4_in_v6 only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "::ffff:192.168.0.1", // section 2.5.5.2 of RFC4291
@@ -277,7 +276,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote name only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "example.com",
@@ -294,7 +293,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with remote port only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: ":56",
@@ -311,7 +310,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host name only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -330,7 +329,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv4 only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -349,7 +348,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv6 only",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -368,7 +367,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host name and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -388,7 +387,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv4 and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -408,7 +407,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv6 and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -428,7 +427,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host name and bogus port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -447,7 +446,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv4 and bogus port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -466,7 +465,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv6 and bogus port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -485,7 +484,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with empty host and port",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -504,7 +503,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ip and port in headers",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -526,7 +525,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv4 and port in url",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "http://4.3.2.1:78/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -547,7 +546,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host ipv6 and port in url",
 			network:    "tcp",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "http://4.3.2.1:78/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "1.2.3.4:56",
@@ -581,7 +580,7 @@ func TestNetAttributesFromHTTPRequest(t *testing.T) {
 }
 
 func TestEndUserAttributesFromHTTPRequest(t *testing.T) {
-	r := testRequest("GET", "/user/123", "HTTP/1.1", "", "", nil, http.Header{}, withTLS)
+	r := testRequest(http.MethodGet, "/user/123", "HTTP/1.1", "", "", nil, http.Header{}, withTLS)
 	var expected []attribute.KeyValue
 	got := sc.EndUserAttributesFromHTTPRequest(r)
 	assert.ElementsMatch(t, expected, got)
@@ -615,7 +614,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "stripped",
 			serverName: "",
 			route:      "",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -626,7 +625,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    noTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "http"),
 				attribute.String("http.flavor", "1.0"),
@@ -636,7 +635,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with server name",
 			serverName: "my-server-name",
 			route:      "",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -647,7 +646,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    noTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "http"),
 				attribute.String("http.flavor", "1.0"),
@@ -658,7 +657,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with tls",
 			serverName: "my-server-name",
 			route:      "",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -669,7 +668,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -680,7 +679,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with route",
 			serverName: "my-server-name",
 			route:      "/user/:id",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -691,7 +690,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -703,7 +702,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with host",
 			serverName: "my-server-name",
 			route:      "/user/:id",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -714,7 +713,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -727,7 +726,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with host fallback",
 			serverName: "my-server-name",
 			route:      "/user/:id",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -739,7 +738,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -752,7 +751,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with user agent",
 			serverName: "my-server-name",
 			route:      "/user/:id",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -765,7 +764,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -779,7 +778,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with proxy info",
 			serverName: "my-server-name",
 			route:      "/user/:id",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -793,7 +792,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -808,7 +807,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with http 1.1",
 			serverName: "my-server-name",
 			route:      "/user/:id",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.1",
 			remoteAddr: "",
@@ -822,7 +821,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.1"),
@@ -837,7 +836,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			name:       "with http 2",
 			serverName: "my-server-name",
 			route:      "/user/:id",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/2.0",
 			remoteAddr: "",
@@ -851,7 +850,7 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "2"),
@@ -864,11 +863,11 @@ func TestHTTPServerAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:          "with content length",
-			method:        "GET",
+			method:        http.MethodGet,
 			requestURI:    "/user/123",
 			contentLength: 100,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.target", "/user/123"),
 				attribute.String("http.scheme", "http"),
 				attribute.Int64("http.request_content_length", 100),
@@ -898,7 +897,7 @@ func TestHTTPAttributesFromHTTPStatusCode(t *testing.T) {
 }
 
 func TestSpanStatusFromHTTPStatusCode(t *testing.T) {
-	for code := 0; code < 1000; code++ {
+	for code := range 1000 {
 		expected := getExpectedCodeForHTTPCode(code, trace.SpanKindClient)
 		got, msg := SpanStatusFromHTTPStatusCode(code)
 		assert.Equalf(t, expected, got, "%s vs %s", expected, got)
@@ -913,7 +912,7 @@ func TestSpanStatusFromHTTPStatusCode(t *testing.T) {
 }
 
 func TestSpanStatusFromHTTPStatusCodeAndSpanKind(t *testing.T) {
-	for code := 0; code < 1000; code++ {
+	for code := range 1000 {
 		expected := getExpectedCodeForHTTPCode(code, trace.SpanKindClient)
 		got, msg := SpanStatusFromHTTPStatusCodeAndSpanKind(code, trace.SpanKindClient)
 		assert.Equalf(t, expected, got, "%s vs %s", expected, got)
@@ -954,14 +953,19 @@ func getExpectedCodeForHTTPCode(code int, spanKind trace.SpanKind) codes.Code {
 	return codes.Error
 }
 
-func assertElementsMatch(t *testing.T, expected, got []attribute.KeyValue, format string, args ...interface{}) {
+func assertElementsMatch(t *testing.T, expected, got []attribute.KeyValue, format string, args ...any) {
 	if !assert.ElementsMatchf(t, expected, got, format, args...) {
 		t.Log("expected:", kvStr(expected))
 		t.Log("got:", kvStr(got))
 	}
 }
 
-func testRequest(method, requestURI, proto, remoteAddr, host string, u *url.URL, header http.Header, tlsopt tlsOption) *http.Request {
+func testRequest(
+	method, requestURI, proto, remoteAddr, host string,
+	u *url.URL,
+	header http.Header,
+	tlsopt tlsOption,
+) *http.Request {
 	major, minor := protoToInts(proto)
 	var tlsConn *tls.ConnectionState
 	switch tlsopt {
@@ -1003,7 +1007,7 @@ func kvStr(kvs []attribute.KeyValue) string {
 		if idx > 0 {
 			_, _ = sb.WriteString(", ")
 		}
-		_, _ = sb.WriteString((string)(attr.Key))
+		_, _ = sb.WriteString(string(attr.Key))
 		_, _ = sb.WriteString(": ")
 		_, _ = sb.WriteString(attr.Value.Emit())
 	}
@@ -1029,7 +1033,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 	}{
 		{
 			name:       "stripped",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1040,7 +1044,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    noTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "http"),
 				attribute.String("http.flavor", "1.0"),
@@ -1048,7 +1052,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:       "with tls",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1059,7 +1063,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -1067,7 +1071,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:       "with host",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1078,7 +1082,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -1087,7 +1091,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:       "with host fallback",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1100,7 +1104,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "https://example.com/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -1109,7 +1113,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:       "with user agent",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1122,7 +1126,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
@@ -1132,7 +1136,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:       "with http 1.1",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.1",
 			remoteAddr: "",
@@ -1145,7 +1149,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.1"),
@@ -1155,7 +1159,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:       "with http 2",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/2.0",
 			remoteAddr: "",
@@ -1168,7 +1172,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "2"),
@@ -1178,13 +1182,13 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 		},
 		{
 			name:   "with content length",
-			method: "GET",
+			method: http.MethodGet,
 			url: &url.URL{
 				Path: "/user/123",
 			},
 			contentLength: 100,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "http"),
 				attribute.Int64("http.request_content_length", 100),
@@ -1197,7 +1201,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 				Path: "/user/123",
 			},
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "http"),
 			},
@@ -1210,7 +1214,7 @@ func TestHTTPClientAttributesFromHTTPRequest(t *testing.T) {
 				User: url.UserPassword("foo", "bar"),
 			},
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.url", "/user/123"),
 				attribute.String("http.scheme", "http"),
 			},
@@ -1246,7 +1250,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "stripped",
 			serverName: "",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1257,7 +1261,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    noTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "http"),
 				attribute.String("http.flavor", "1.0"),
 			},
@@ -1265,7 +1269,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with server name",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1276,7 +1280,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    noTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "http"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1285,7 +1289,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with tls",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1296,7 +1300,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1305,7 +1309,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with route",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1316,7 +1320,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1325,7 +1329,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1336,7 +1340,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1346,7 +1350,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with host fallback",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1358,7 +1362,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1368,7 +1372,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with user agent",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1381,7 +1385,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1391,7 +1395,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with proxy info",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1405,7 +1409,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1415,7 +1419,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with http 1.1",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.1",
 			remoteAddr: "",
@@ -1429,7 +1433,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "1.1"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1439,7 +1443,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 		{
 			name:       "with http 2",
 			serverName: "my-server-name",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/2.0",
 			remoteAddr: "",
@@ -1453,7 +1457,7 @@ func TestHTTPServerMetricAttributesFromHTTPRequest(t *testing.T) {
 			},
 			tls: withTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "https"),
 				attribute.String("http.flavor", "2"),
 				attribute.String("http.server_name", "my-server-name"),
@@ -1486,7 +1490,7 @@ func TestHttpBasicAttributesFromHTTPRequest(t *testing.T) {
 	testcases := []testcase{
 		{
 			name:       "stripped",
-			method:     "GET",
+			method:     http.MethodGet,
 			requestURI: "/user/123",
 			proto:      "HTTP/1.0",
 			remoteAddr: "",
@@ -1497,7 +1501,7 @@ func TestHttpBasicAttributesFromHTTPRequest(t *testing.T) {
 			header: nil,
 			tls:    noTLS,
 			expected: []attribute.KeyValue{
-				attribute.String("http.method", "GET"),
+				attribute.String("http.method", http.MethodGet),
 				attribute.String("http.scheme", "http"),
 				attribute.String("http.flavor", "1.0"),
 				attribute.String("http.host", "example.com"),

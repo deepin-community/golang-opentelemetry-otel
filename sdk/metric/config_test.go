@@ -5,7 +5,7 @@ package metric
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -13,26 +13,30 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/otel/attribute"
-	ottest "go.opentelemetry.io/otel/sdk/internal/internaltest"
+	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type reader struct {
-	producer          sdkProducer
-	externalProducers []Producer
-	temporalityFunc   TemporalitySelector
-	aggregationFunc   AggregationSelector
-	collectFunc       func(context.Context, *metricdata.ResourceMetrics) error
-	forceFlushFunc    func(context.Context) error
-	shutdownFunc      func(context.Context) error
+	producer                 sdkProducer
+	externalProducers        []Producer
+	temporalityFunc          TemporalitySelector
+	aggregationFunc          AggregationSelector
+	cardinalityLimitSelector CardinalityLimitSelector
+	collectFunc              func(context.Context, *metricdata.ResourceMetrics) error
+	forceFlushFunc           func(context.Context) error
+	shutdownFunc             func(context.Context) error
 }
 
 const envVarResourceAttributes = "OTEL_RESOURCE_ATTRIBUTES"
 
 var _ Reader = (*reader)(nil)
 
-func (r *reader) aggregation(kind InstrumentKind) Aggregation { // nolint:revive  // import-shadow for method scoped by type.
+func (r *reader) aggregation(
+	kind InstrumentKind,
+) Aggregation { // nolint:revive  // import-shadow for method scoped by type.
 	return r.aggregationFunc(kind)
 }
 
@@ -40,6 +44,13 @@ func (r *reader) register(p sdkProducer)      { r.producer = p }
 func (r *reader) RegisterProducer(p Producer) { r.externalProducers = append(r.externalProducers, p) }
 func (r *reader) temporality(kind InstrumentKind) metricdata.Temporality {
 	return r.temporalityFunc(kind)
+}
+
+func (r *reader) cardinalityLimit(kind InstrumentKind) (int, bool) {
+	if r.cardinalityLimitSelector != nil {
+		return r.cardinalityLimitSelector(kind)
+	}
+	return 0, true
 }
 
 func (r *reader) Collect(ctx context.Context, rm *metricdata.ResourceMetrics) error {
@@ -54,7 +65,7 @@ func TestConfigReaderSignalsEmpty(t *testing.T) {
 	require.NotNil(t, f)
 	require.NotNil(t, s)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	assert.NoError(t, f(ctx))
 	assert.NoError(t, s(ctx))
 	assert.ErrorIs(t, s(ctx), ErrReaderShutdown)
@@ -63,11 +74,11 @@ func TestConfigReaderSignalsEmpty(t *testing.T) {
 func TestConfigReaderSignalsForwarded(t *testing.T) {
 	var flush, sdown int
 	r := &reader{
-		forceFlushFunc: func(ctx context.Context) error {
+		forceFlushFunc: func(context.Context) error {
 			flush++
 			return nil
 		},
-		shutdownFunc: func(ctx context.Context) error {
+		shutdownFunc: func(context.Context) error {
 			sdown++
 			return nil
 		},
@@ -78,7 +89,7 @@ func TestConfigReaderSignalsForwarded(t *testing.T) {
 	require.NotNil(t, f)
 	require.NotNil(t, s)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	assert.NoError(t, f(ctx))
 	assert.NoError(t, f(ctx))
 	assert.NoError(t, s(ctx))
@@ -90,8 +101,8 @@ func TestConfigReaderSignalsForwarded(t *testing.T) {
 
 func TestConfigReaderSignalsForwardedErrors(t *testing.T) {
 	r := &reader{
-		forceFlushFunc: func(ctx context.Context) error { return assert.AnError },
-		shutdownFunc:   func(ctx context.Context) error { return assert.AnError },
+		forceFlushFunc: func(context.Context) error { return assert.AnError },
+		shutdownFunc:   func(context.Context) error { return assert.AnError },
 	}
 	c := newConfig([]Option{WithReader(r)})
 	f, s := c.readerSignals()
@@ -99,18 +110,26 @@ func TestConfigReaderSignalsForwardedErrors(t *testing.T) {
 	require.NotNil(t, f)
 	require.NotNil(t, s)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	assert.ErrorIs(t, f(ctx), assert.AnError)
 	assert.ErrorIs(t, s(ctx), assert.AnError)
 	assert.ErrorIs(t, s(ctx), ErrReaderShutdown)
 }
 
 func TestUnifyMultiError(t *testing.T) {
-	f := func(context.Context) error { return assert.AnError }
-	funcs := []func(context.Context) error{f, f, f}
-	errs := []error{assert.AnError, assert.AnError, assert.AnError}
-	target := fmt.Errorf("%v", errs)
-	assert.Equal(t, unify(funcs)(context.Background()), target)
+	var (
+		e0 = errors.New("0")
+		e1 = errors.New("1")
+		e2 = errors.New("2")
+	)
+	err := unify([]func(context.Context) error{
+		func(context.Context) error { return e0 },
+		func(context.Context) error { return e1 },
+		func(context.Context) error { return e2 },
+	})(t.Context())
+	assert.ErrorIs(t, err, e0)
+	assert.ErrorIs(t, err, e1)
+	assert.ErrorIs(t, err, e2)
 }
 
 func mergeResource(t *testing.T, r1, r2 *resource.Resource) *resource.Resource {
@@ -120,11 +139,7 @@ func mergeResource(t *testing.T, r1, r2 *resource.Resource) *resource.Resource {
 }
 
 func TestWithResource(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		envVarResourceAttributes: "key=value,rk5=7",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
+	t.Setenv(envVarResourceAttributes, "key=value,rk5=7")
 
 	cases := []struct {
 		name    string
@@ -143,9 +158,15 @@ func TestWithResource(t *testing.T) {
 			want:    resource.Default(),
 		},
 		{
-			name:    "explicit resource",
-			options: []Option{WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5)))},
-			want:    mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5))),
+			name: "explicit resource",
+			options: []Option{
+				WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5))),
+			},
+			want: mergeResource(
+				t,
+				resource.Environment(),
+				resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5)),
+			),
 		},
 		{
 			name: "last resource wins",
@@ -153,16 +174,25 @@ func TestWithResource(t *testing.T) {
 				WithResource(resource.NewSchemaless(attribute.String("rk1", "vk1"), attribute.Int64("rk2", 5))),
 				WithResource(resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10))),
 			},
-			want: mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10))),
+			want: mergeResource(
+				t,
+				resource.Environment(),
+				resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10)),
+			),
 		},
 		{
-			name:    "overlapping attributes with environment resource",
-			options: []Option{WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10)))},
-			want:    mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10))),
+			name: "overlapping attributes with environment resource",
+			options: []Option{
+				WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10))),
+			},
+			want: mergeResource(
+				t,
+				resource.Environment(),
+				resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10)),
+			),
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := newConfig(tc.options).res
 			if diff := cmp.Diff(got, tc.want); diff != "" {
@@ -191,4 +221,151 @@ func TestWithView(t *testing.T) {
 		),
 	)})
 	assert.Len(t, c.views, 2)
+}
+
+func TestWithExemplarFilterOff(t *testing.T) {
+	for _, tc := range []struct {
+		desc                   string
+		opts                   []Option
+		env                    string
+		expectFilterSampled    bool
+		expectFilterNotSampled bool
+	}{
+		{
+			desc:                   "default",
+			expectFilterSampled:    true,
+			expectFilterNotSampled: false,
+		},
+		{
+			desc:                   "always on option",
+			opts:                   []Option{WithExemplarFilter(exemplar.AlwaysOnFilter)},
+			expectFilterSampled:    true,
+			expectFilterNotSampled: true,
+		},
+		{
+			desc:                   "always off option",
+			opts:                   []Option{WithExemplarFilter(exemplar.AlwaysOffFilter)},
+			expectFilterSampled:    false,
+			expectFilterNotSampled: false,
+		},
+		{
+			desc:                   "trace based option",
+			opts:                   []Option{WithExemplarFilter(exemplar.TraceBasedFilter)},
+			expectFilterSampled:    true,
+			expectFilterNotSampled: false,
+		},
+		{
+			desc: "last option takes precedence",
+			opts: []Option{
+				WithExemplarFilter(exemplar.AlwaysOffFilter),
+				WithExemplarFilter(exemplar.AlwaysOnFilter),
+			},
+			expectFilterSampled:    true,
+			expectFilterNotSampled: true,
+		},
+		{
+			desc:                   "always_off env",
+			env:                    "always_off",
+			expectFilterSampled:    false,
+			expectFilterNotSampled: false,
+		},
+		{
+			desc:                   "always_on env",
+			env:                    "always_on",
+			expectFilterSampled:    true,
+			expectFilterNotSampled: true,
+		},
+		{
+			desc:                   "always_on case insensitiveenv",
+			env:                    "ALWAYS_ON",
+			expectFilterSampled:    true,
+			expectFilterNotSampled: true,
+		},
+		{
+			desc:                   "trace_based env",
+			env:                    "trace_based",
+			expectFilterSampled:    true,
+			expectFilterNotSampled: false,
+		},
+		{
+			desc:                   "wrong env",
+			env:                    "foo_bar",
+			expectFilterSampled:    true,
+			expectFilterNotSampled: false,
+		},
+		{
+			desc:                   "option takes precedence over env var",
+			env:                    "always_off",
+			opts:                   []Option{WithExemplarFilter(exemplar.AlwaysOnFilter)},
+			expectFilterSampled:    true,
+			expectFilterNotSampled: true,
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			if tc.env != "" {
+				t.Setenv("OTEL_METRICS_EXEMPLAR_FILTER", tc.env)
+			}
+			c := newConfig(tc.opts)
+			assert.NotNil(t, c.exemplarFilter)
+			assert.Equal(t, tc.expectFilterNotSampled, c.exemplarFilter(t.Context()))
+			assert.Equal(t, tc.expectFilterSampled, c.exemplarFilter(sample(t.Context())))
+		})
+	}
+}
+
+func TestWithCardinalityLimit(t *testing.T) {
+	cases := []struct {
+		name          string
+		envValue      string
+		options       []Option
+		expectedLimit int
+	}{
+		{
+			name:          "only cardinality limit from option",
+			envValue:      "",
+			options:       []Option{WithCardinalityLimit(1000)},
+			expectedLimit: 1000,
+		},
+		{
+			name:          "cardinality limit from option overrides env",
+			envValue:      "500",
+			options:       []Option{WithCardinalityLimit(1000)},
+			expectedLimit: 1000,
+		},
+		{
+			name:          "cardinality limit from env",
+			envValue:      "1234",
+			options:       []Option{},
+			expectedLimit: 1234,
+		},
+		{
+			name:          "invalid env value uses default",
+			envValue:      "not-a-number",
+			options:       []Option{},
+			expectedLimit: defaultCardinalityLimit,
+		},
+		{
+			name:          "empty env and no option uses default",
+			envValue:      "",
+			options:       []Option{},
+			expectedLimit: defaultCardinalityLimit,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OTEL_GO_X_CARDINALITY_LIMIT", tc.envValue)
+			c := newConfig(tc.options)
+			assert.Equal(t, tc.expectedLimit, c.cardinalityLimit)
+		})
+	}
+}
+
+func sample(parent context.Context) context.Context {
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{0x01},
+		SpanID:     trace.SpanID{0x01},
+		TraceFlags: trace.FlagsSampled,
+	})
+	return trace.ContextWithSpanContext(parent, sc)
 }

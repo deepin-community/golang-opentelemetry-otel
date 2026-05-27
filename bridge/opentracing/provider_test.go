@@ -6,14 +6,14 @@ package opentracing
 import (
 	"testing"
 
-	"go.opentelemetry.io/otel/bridge/opentracing/internal"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/embedded"
 )
 
 type namedMockTracer struct {
 	name string
-	*internal.MockTracer
+	*mockTracer
 }
 
 type namedMockTracerProvider struct{ embedded.TracerProvider }
@@ -21,10 +21,10 @@ type namedMockTracerProvider struct{ embedded.TracerProvider }
 var _ trace.TracerProvider = (*namedMockTracerProvider)(nil)
 
 // Tracer returns the WrapperTracer associated with the WrapperTracerProvider.
-func (p *namedMockTracerProvider) Tracer(name string, opts ...trace.TracerOption) trace.Tracer {
+func (*namedMockTracerProvider) Tracer(name string, _ ...trace.TracerOption) trace.Tracer {
 	return &namedMockTracer{
 		name:       name,
-		MockTracer: internal.NewMockTracer(),
+		mockTracer: newMockTracer(),
 	}
 }
 
@@ -58,18 +58,41 @@ func TestTracerProvider(t *testing.T) {
 	})
 
 	t.Run("Repeated requests to create a tracer should provide the existing tracer", func(t *testing.T) {
-		tracer1 := provider.Tracer(foobar)
-		assertMockTracerName(t, tracer1, foobar)
-		tracer2 := provider.Tracer(foobar)
-		assertMockTracerName(t, tracer2, foobar)
-		tracer3 := provider.Tracer(bazbar)
-		assertMockTracerName(t, tracer3, bazbar)
-
-		if tracer1 != tracer2 {
-			t.Errorf("expected the same tracer, got different tracers")
+		tracerFns := []func() trace.Tracer{
+			func() trace.Tracer {
+				return provider.Tracer(foobar)
+			},
+			func() trace.Tracer {
+				return provider.Tracer(bazbar)
+			},
+			func() trace.Tracer {
+				return provider.Tracer(foobar, trace.WithSchemaURL("http://opentelemetry.io/schemas/1.21.0"))
+			},
+			func() trace.Tracer {
+				return provider.Tracer(foobar, trace.WithInstrumentationAttributes(attribute.String("foo", "bar")))
+			},
+			func() trace.Tracer {
+				return provider.Tracer(
+					foobar,
+					trace.WithSchemaURL("https://opentelemetry.io/schemas/1.21.0"),
+					trace.WithInstrumentationAttributes(attribute.String("foo", "bar")),
+				)
+			},
 		}
-		if tracer1 == tracer3 || tracer2 == tracer3 {
-			t.Errorf("expected different tracers, got the same tracer")
+
+		for i, fn1 := range tracerFns {
+			for j, fn2 := range tracerFns {
+				tracer1, tracer2 := fn1(), fn2()
+				if i == j {
+					if tracer1 != tracer2 {
+						t.Errorf("expected the same tracer, got different tracers; i=%d j=%d", i, j)
+					}
+				} else {
+					if tracer1 == tracer2 {
+						t.Errorf("expected different tracers, got the same tracer; i=%d j=%d", i, j)
+					}
+				}
+			}
 		}
 	})
 }

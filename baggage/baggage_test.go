@@ -5,7 +5,7 @@ package baggage
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
@@ -17,12 +17,8 @@ import (
 	"go.opentelemetry.io/otel/internal/baggage"
 )
 
-var rng *rand.Rand
-
-func init() {
-	// Seed with a static value to ensure deterministic results.
-	rng = rand.New(rand.NewSource(1))
-}
+// Seed with a static value to ensure deterministic results.
+var rng = rand.New(rand.NewChaCha8([32]byte{}))
 
 func TestValidateKeyChar(t *testing.T) {
 	// ASCII only
@@ -255,18 +251,24 @@ func key(n int) string {
 
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = r[rng.Intn(len(r))]
+		b[i] = r[rng.IntN(len(r))]
 	}
 	return string(b)
 }
 
 func TestNewBaggageErrorTooManyBytes(t *testing.T) {
-	m := make([]Member, (maxBytesPerBaggageString/maxBytesPerMembers)+1)
+	// Create members that together exceed maxBytesPerBaggageString.
+	// Each member needs key + "=" so use keys that sum to > 8192 bytes.
+	keySize := maxBytesPerBaggageString / maxMembers
+	m := make([]Member, maxMembers)
 	for i := range m {
-		m[i] = Member{key: key(maxBytesPerMembers), hasData: true}
+		m[i] = Member{key: key(keySize), hasData: true}
 	}
-	_, err := New(m...)
+	b, err := New(m...)
 	assert.ErrorIs(t, err, errBaggageBytes)
+	// Partial result should contain members that fit within the byte limit.
+	assert.Positive(t, b.Len(), "should return partial baggage")
+	assert.LessOrEqual(t, len(b.String()), maxBytesPerBaggageString, "partial baggage should be within byte limit")
 }
 
 func TestNewBaggageErrorTooManyMembers(t *testing.T) {
@@ -274,14 +276,14 @@ func TestNewBaggageErrorTooManyMembers(t *testing.T) {
 	for i := range m {
 		m[i] = Member{key: fmt.Sprintf("%d", i), hasData: true}
 	}
-	_, err := New(m...)
+	b, err := New(m...)
 	assert.ErrorIs(t, err, errMemberNumber)
+	// Partial result should contain exactly maxMembers.
+	assert.Equal(t, maxMembers, b.Len(), "should return first %d members", maxMembers)
 }
 
 func TestBaggageParse(t *testing.T) {
 	tooLarge := key(maxBytesPerBaggageString + 1)
-
-	tooLargeMember := key(maxBytesPerMembers + 1)
 
 	m := make([]string, maxMembers+1)
 	for i := range m {
@@ -472,7 +474,11 @@ func TestBaggageParse(t *testing.T) {
 		{
 			name: "invalid member: empty",
 			in:   "foo=,,bar=",
-			err:  errInvalidMember,
+			want: baggage.List{
+				"foo": {},
+				"bar": {},
+			},
+			err: errInvalidMember,
 		},
 		{
 			name: "invalid member: no key",
@@ -522,17 +528,47 @@ func TestBaggageParse(t *testing.T) {
 		{
 			name: "invalid baggage string: too large",
 			in:   tooLarge,
-			err:  errBaggageBytes,
+			// tooLarge is a single key without "=", so parseMember fails
+			err: errInvalidMember,
 		},
 		{
-			name: "invalid baggage string: member too large",
-			in:   tooLargeMember,
-			err:  errMemberBytes,
-		},
-		{
-			name: "invalid baggage string: too many members",
+			name: "baggage string with too many members keeps first 64",
 			in:   tooManyMembers,
-			err:  errMemberNumber,
+			want: func() baggage.List {
+				b := make(baggage.List)
+				for i := range maxMembers {
+					b[fmt.Sprintf("a%d", i)] = baggage.Item{Value: ""}
+				}
+				return b
+			}(),
+			err: errMemberNumber,
+		},
+		{
+			name: "baggage string exceeds byte limit returns partial result",
+			in: func() string {
+				// Create members that collectively exceed maxBytesPerBaggageString.
+				// Each member: "kN=" + value. We use values large enough that
+				// a few members fit but the total exceeds 8192 bytes.
+				var parts []string
+				val := strings.Repeat("v", 2000)
+				for i := range 10 {
+					parts = append(parts, fmt.Sprintf("k%d=%s", i, val))
+				}
+				return strings.Join(parts, ",")
+			}(),
+			want: func() baggage.List {
+				// Only members that fit within 8192 bytes should be kept.
+				// Each member is ~2003 bytes ("kN=" + 2000 "v"s), plus comma.
+				// 4 members = 4*2003 + 3 commas = 8015 bytes (fits).
+				// 5 members = 5*2003 + 4 commas = 10019 bytes (exceeds).
+				b := make(baggage.List)
+				val := strings.Repeat("v", 2000)
+				for i := range 4 {
+					b[fmt.Sprintf("k%d", i)] = baggage.Item{Value: val}
+				}
+				return b
+			}(),
+			err: errBaggageBytes,
 		},
 		{
 			name: "percent-encoded octet sequences do not match the UTF-8 encoding scheme",
@@ -593,11 +629,11 @@ func TestBaggageParseValue(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := Parse(tc.in)
-			assert.Empty(t, err)
+			assert.NoError(t, err)
 
 			val := b.Members()[0].Value()
 
-			assert.EqualValues(t, tc.valueWant, val)
+			assert.Equal(t, tc.valueWant, val)
 			assert.Equal(t, len(val), tc.valueWantSize)
 			assert.True(t, utf8.ValidString(val))
 		})
@@ -971,7 +1007,7 @@ func TestBaggageMember(t *testing.T) {
 
 func TestMemberKey(t *testing.T) {
 	m := Member{}
-	assert.Equal(t, "", m.Key(), "even invalid values should be returned")
+	assert.Empty(t, m.Key(), "even invalid values should be returned")
 
 	key := "k"
 	m.key = key
@@ -1152,9 +1188,8 @@ func BenchmarkNew(b *testing.B) {
 	mem4, _ := NewMemberRaw("key4", "val4")
 
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		benchBaggage, _ = New(mem1, mem2, mem3, mem4)
 	}
 }
@@ -1164,7 +1199,7 @@ var benchMember Member
 func BenchmarkNewMemberRaw(b *testing.B) {
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		benchMember, _ = NewMemberRaw("key", "value")
 	}
 }
@@ -1172,8 +1207,10 @@ func BenchmarkNewMemberRaw(b *testing.B) {
 func BenchmarkParse(b *testing.B) {
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
-		benchBaggage, _ = Parse("userId=alice,serverNode = DF28 , isProduction = false,hasProp=stuff;propKey;propWValue=value, invalidUtf8=pr%ffo%ffp%fcValue")
+	for b.Loop() {
+		benchBaggage, _ = Parse(
+			"userId=alice,serverNode = DF28 , isProduction = false,hasProp=stuff;propKey;propWValue=value, invalidUtf8=pr%ffo%ffp%fcValue",
+		)
 	}
 }
 
@@ -1194,9 +1231,8 @@ func BenchmarkString(b *testing.B) {
 	require.NoError(b, err)
 
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = bg.String()
 	}
 }
@@ -1231,8 +1267,8 @@ func BenchmarkMemberString(b *testing.B) {
 	member, err := NewMember(alphabet, alphabet, props...)
 	require.NoError(b, err)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_ = member.String()
 	}
 }

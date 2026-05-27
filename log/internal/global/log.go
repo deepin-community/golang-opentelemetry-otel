@@ -1,6 +1,8 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// Package global is the internal implementation of the OpenTelemetry global
+// Logs API.
 package global // import "go.opentelemetry.io/otel/log/internal/global"
 
 import (
@@ -8,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/embedded"
 )
@@ -15,7 +18,12 @@ import (
 // instLib defines the instrumentation library a logger is created for.
 //
 // Do not use sdk/instrumentation (API cannot depend on the SDK).
-type instLib struct{ name, version, schemaURL string }
+type instLib struct {
+	name      string
+	version   string
+	schemaURL string
+	attrs     attribute.Set
+}
 
 type loggerProvider struct {
 	embedded.LoggerProvider
@@ -41,6 +49,7 @@ func (p *loggerProvider) Logger(name string, options ...log.LoggerOption) log.Lo
 		name:      name,
 		version:   cfg.InstrumentationVersion(),
 		schemaURL: cfg.SchemaURL(),
+		attrs:     cfg.InstrumentationAttributes(),
 	}
 
 	if p.loggers == nil {

@@ -83,7 +83,7 @@ func (ts *readerTestSuite) TestShutdownTwice() {
 func (ts *readerTestSuite) TestMultipleRegister() {
 	ts.Reader = ts.Factory()
 	p0 := testSDKProducer{
-		produceFunc: func(ctx context.Context, rm *metricdata.ResourceMetrics) error {
+		produceFunc: func(_ context.Context, rm *metricdata.ResourceMetrics) error {
 			// Differentiate this producer from the second by returning an
 			// error.
 			*rm = testResourceMetricsA
@@ -103,12 +103,12 @@ func (ts *readerTestSuite) TestMultipleRegister() {
 func (ts *readerTestSuite) TestExternalProducerPartialSuccess() {
 	ts.Reader = ts.Factory(
 		WithProducer(testExternalProducer{
-			produceFunc: func(ctx context.Context) ([]metricdata.ScopeMetrics, error) {
+			produceFunc: func(context.Context) ([]metricdata.ScopeMetrics, error) {
 				return []metricdata.ScopeMetrics{}, assert.AnError
 			},
 		}),
 		WithProducer(testExternalProducer{
-			produceFunc: func(ctx context.Context) ([]metricdata.ScopeMetrics, error) {
+			produceFunc: func(context.Context) ([]metricdata.ScopeMetrics, error) {
 				return []metricdata.ScopeMetrics{testScopeMetricsB}, nil
 			},
 		}),
@@ -117,14 +117,14 @@ func (ts *readerTestSuite) TestExternalProducerPartialSuccess() {
 
 	m := metricdata.ResourceMetrics{}
 	err := ts.Reader.Collect(context.Background(), &m)
-	ts.Equal(assert.AnError, err)
+	ts.ErrorIs(err, assert.AnError)
 	ts.Equal(testResourceMetricsAB, m)
 }
 
 func (ts *readerTestSuite) TestSDKFailureBlocksExternalProducer() {
 	ts.Reader = ts.Factory(WithProducer(testExternalProducer{}))
 	ts.Reader.register(testSDKProducer{
-		produceFunc: func(ctx context.Context, rm *metricdata.ResourceMetrics) error {
+		produceFunc: func(_ context.Context, rm *metricdata.ResourceMetrics) error {
 			*rm = metricdata.ResourceMetrics{}
 			return assert.AnError
 		},
@@ -146,38 +146,28 @@ func (ts *readerTestSuite) TestMethodConcurrentSafe() {
 
 	var wg sync.WaitGroup
 	const threads = 2
-	for i := 0; i < threads; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range threads {
+		wg.Go(func() {
 			_ = ts.Reader.temporality(InstrumentKindCounter)
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = ts.Reader.aggregation(InstrumentKindCounter)
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = ts.Reader.Collect(ctx, &metricdata.ResourceMetrics{})
-		}()
+		})
 
 		if f, ok := ts.Reader.(interface{ ForceFlush(context.Context) error }); ok {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				_ = f.ForceFlush(ctx)
-			}()
+			})
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = ts.Reader.Shutdown(ctx)
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -270,8 +260,7 @@ func (p testExternalProducer) Produce(ctx context.Context) ([]metricdata.ScopeMe
 	return []metricdata.ScopeMetrics{testScopeMetricsB}, nil
 }
 
-func benchReaderCollectFunc(r Reader) func(*testing.B) {
-	ctx := context.Background()
+func benchReaderCollectFunc(r Reader) func(b *testing.B) {
 	r.register(testSDKProducer{})
 
 	// Store benchmark results in a closure to prevent the compiler from
@@ -286,8 +275,15 @@ func benchReaderCollectFunc(r Reader) func(*testing.B) {
 		b.ResetTimer()
 
 		for n := 0; n < b.N; n++ {
-			err = r.Collect(ctx, &collectedMetrics)
-			assert.Equalf(b, testResourceMetricsA, collectedMetrics, "unexpected Collect response: (%#v, %v)", collectedMetrics, err)
+			err = r.Collect(b.Context(), &collectedMetrics)
+			assert.Equalf(
+				b,
+				testResourceMetricsA,
+				collectedMetrics,
+				"unexpected Collect response: (%#v, %v)",
+				collectedMetrics,
+				err,
+			)
 		}
 	}
 }
@@ -307,7 +303,7 @@ func TestDefaultAggregationSelector(t *testing.T) {
 	}
 
 	for _, ik := range iKinds {
-		assert.NoError(t, DefaultAggregationSelector(ik).err(), ik)
+		assert.NoError(t, DefaultAggregationSelector(ik).err(), "%+v", ik)
 	}
 }
 
@@ -324,6 +320,64 @@ func TestDefaultTemporalitySelector(t *testing.T) {
 		InstrumentKindObservableGauge,
 	} {
 		assert.Equal(t, metricdata.CumulativeTemporality, DefaultTemporalitySelector(ik))
+	}
+}
+
+func TestCumulativeTemporalitySelector(t *testing.T) {
+	var undefinedInstrument InstrumentKind
+	for _, ik := range []InstrumentKind{
+		undefinedInstrument,
+		InstrumentKindCounter,
+		InstrumentKindUpDownCounter,
+		InstrumentKindHistogram,
+		InstrumentKindGauge,
+		InstrumentKindObservableCounter,
+		InstrumentKindObservableUpDownCounter,
+		InstrumentKindObservableGauge,
+	} {
+		assert.Equal(t, metricdata.CumulativeTemporality, CumulativeTemporalitySelector(ik))
+	}
+}
+
+func TestDeltaTemporalitySelector(t *testing.T) {
+	var undefinedInstrument InstrumentKind
+	for _, ik := range []InstrumentKind{
+		InstrumentKindCounter,
+		InstrumentKindHistogram,
+		InstrumentKindObservableCounter,
+	} {
+		assert.Equal(t, metricdata.DeltaTemporality, DeltaTemporalitySelector(ik))
+	}
+
+	for _, ik := range []InstrumentKind{
+		undefinedInstrument,
+		InstrumentKindGauge,
+		InstrumentKindObservableGauge,
+		InstrumentKindObservableUpDownCounter,
+		InstrumentKindUpDownCounter,
+	} {
+		assert.Equal(t, metricdata.CumulativeTemporality, DeltaTemporalitySelector(ik))
+	}
+}
+
+func TestLowMemoryTemporalitySelector(t *testing.T) {
+	var undefinedInstrument InstrumentKind
+	for _, ik := range []InstrumentKind{
+		InstrumentKindCounter,
+		InstrumentKindHistogram,
+	} {
+		assert.Equal(t, metricdata.DeltaTemporality, LowMemoryTemporalitySelector(ik))
+	}
+
+	for _, ik := range []InstrumentKind{
+		undefinedInstrument,
+		InstrumentKindGauge,
+		InstrumentKindObservableCounter,
+		InstrumentKindObservableGauge,
+		InstrumentKindObservableUpDownCounter,
+		InstrumentKindUpDownCounter,
+	} {
+		assert.Equal(t, metricdata.CumulativeTemporality, LowMemoryTemporalitySelector(ik))
 	}
 }
 

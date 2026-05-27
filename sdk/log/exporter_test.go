@@ -33,7 +33,7 @@ type testExporter struct {
 	ExportTrigger chan struct{}
 
 	// Counts of method calls.
-	exportN, shutdownN, forceFlushN *int32
+	exportN, shutdownN, forceFlushN atomic.Int32
 
 	stopped atomic.Bool
 	inputMu sync.Mutex
@@ -43,11 +43,8 @@ type testExporter struct {
 
 func newTestExporter(err error) *testExporter {
 	e := &testExporter{
-		Err:         err,
-		exportN:     new(int32),
-		shutdownN:   new(int32),
-		forceFlushN: new(int32),
-		input:       make(chan instruction),
+		Err:   err,
+		input: make(chan instruction),
 	}
 	e.done = run(e.input)
 
@@ -81,7 +78,7 @@ func (e *testExporter) Records() [][]Record {
 }
 
 func (e *testExporter) Export(ctx context.Context, r []Record) error {
-	atomic.AddInt32(e.exportN, 1)
+	e.exportN.Add(1)
 	if e.ExportTrigger != nil {
 		select {
 		case <-e.ExportTrigger:
@@ -98,7 +95,7 @@ func (e *testExporter) Export(ctx context.Context, r []Record) error {
 }
 
 func (e *testExporter) ExportN() int {
-	return int(atomic.LoadInt32(e.exportN))
+	return int(e.exportN.Load())
 }
 
 func (e *testExporter) Stop() {
@@ -112,22 +109,22 @@ func (e *testExporter) Stop() {
 	<-e.done
 }
 
-func (e *testExporter) Shutdown(ctx context.Context) error {
-	atomic.AddInt32(e.shutdownN, 1)
+func (e *testExporter) Shutdown(context.Context) error {
+	e.shutdownN.Add(1)
 	return e.Err
 }
 
 func (e *testExporter) ShutdownN() int {
-	return int(atomic.LoadInt32(e.shutdownN))
+	return int(e.shutdownN.Load())
 }
 
-func (e *testExporter) ForceFlush(ctx context.Context) error {
-	atomic.AddInt32(e.forceFlushN, 1)
+func (e *testExporter) ForceFlush(context.Context) error {
+	e.forceFlushN.Add(1)
 	return e.Err
 }
 
 func (e *testExporter) ForceFlushN() int {
-	return int(atomic.LoadInt32(e.forceFlushN))
+	return int(e.forceFlushN.Load())
 }
 
 func TestChunker(t *testing.T) {
@@ -136,7 +133,7 @@ func TestChunker(t *testing.T) {
 		t.Cleanup(exp.Stop)
 		c := newChunkExporter(exp, 0)
 		const size = 100
-		_ = c.Export(context.Background(), make([]Record, size))
+		_ = c.Export(t.Context(), make([]Record, size))
 
 		assert.Equal(t, 1, exp.ExportN())
 		records := exp.Records()
@@ -148,7 +145,7 @@ func TestChunker(t *testing.T) {
 		exp := newTestExporter(nil)
 		t.Cleanup(exp.Stop)
 		c := newChunkExporter(exp, 0)
-		_ = c.ForceFlush(context.Background())
+		_ = c.ForceFlush(t.Context())
 		assert.Equal(t, 1, exp.ForceFlushN(), "ForceFlush not passed through")
 	})
 
@@ -156,7 +153,7 @@ func TestChunker(t *testing.T) {
 		exp := newTestExporter(nil)
 		t.Cleanup(exp.Stop)
 		c := newChunkExporter(exp, 0)
-		_ = c.Shutdown(context.Background())
+		_ = c.Shutdown(t.Context())
 		assert.Equal(t, 1, exp.ShutdownN(), "Shutdown not passed through")
 	})
 
@@ -164,8 +161,8 @@ func TestChunker(t *testing.T) {
 		exp := newTestExporter(nil)
 		t.Cleanup(exp.Stop)
 		c := newChunkExporter(exp, 10)
-		assert.NoError(t, c.Export(context.Background(), make([]Record, 5)))
-		assert.NoError(t, c.Export(context.Background(), make([]Record, 25)))
+		assert.NoError(t, c.Export(t.Context(), make([]Record, 5)))
+		assert.NoError(t, c.Export(t.Context(), make([]Record, 25)))
 
 		wantLens := []int{5, 10, 10, 5}
 		records := exp.Records()
@@ -179,7 +176,7 @@ func TestChunker(t *testing.T) {
 		exp := newTestExporter(assert.AnError)
 		t.Cleanup(exp.Stop)
 		c := newChunkExporter(exp, 0)
-		ctx := context.Background()
+		ctx := t.Context()
 		records := make([]Record, 25)
 		err := c.Export(ctx, records)
 		assert.ErrorIs(t, err, assert.AnError, "no chunking")
@@ -219,15 +216,12 @@ func TestExportSync(t *testing.T) {
 		done := exportSync(in, exp)
 
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			in <- exportData{
-				ctx:     context.Background(),
+				ctx:     t.Context(),
 				records: make([]Record, 1),
 			}
-		}()
+		})
 
 		wg.Wait()
 		close(in)
@@ -245,7 +239,7 @@ func TestExportSync(t *testing.T) {
 		const goRoutines = 10
 		var wg sync.WaitGroup
 		wg.Add(goRoutines)
-		for i := 0; i < goRoutines; i++ {
+		for i := range goRoutines {
 			go func(n int) {
 				defer wg.Done()
 
@@ -254,7 +248,7 @@ func TestExportSync(t *testing.T) {
 
 				resp := make(chan error, 1)
 				in <- exportData{
-					ctx:     context.Background(),
+					ctx:     t.Context(),
 					records: []Record{r},
 					respCh:  resp,
 				}
@@ -264,7 +258,7 @@ func TestExportSync(t *testing.T) {
 		}
 
 		// Empty records should be ignored.
-		in <- exportData{ctx: context.Background()}
+		in <- exportData{ctx: t.Context()}
 
 		wg.Wait()
 
@@ -307,7 +301,7 @@ func TestTimeoutExporter(t *testing.T) {
 
 		out := make(chan error, 1)
 		go func() {
-			out <- e.Export(context.Background(), make([]Record, 1))
+			out <- e.Export(t.Context(), make([]Record, 1))
 		}()
 
 		var err error
@@ -333,15 +327,13 @@ func TestBufferExporter(t *testing.T) {
 		t.Cleanup(exp.Stop)
 		e := newBufferExporter(exp, goRoutines)
 
-		ctx := context.Background()
+		ctx := t.Context()
 		records := make([]Record, 10)
 
 		stop := make(chan struct{})
 		var wg sync.WaitGroup
-		for i := 0; i < goRoutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range goRoutines {
+			wg.Go(func() {
 				for {
 					select {
 					case <-stop:
@@ -352,7 +344,7 @@ func TestBufferExporter(t *testing.T) {
 						_ = e.ForceFlush(ctx)
 					}
 				}
-			}()
+			})
 		}
 
 		assert.Eventually(t, func() bool {
@@ -370,10 +362,10 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 			e := newBufferExporter(exp, 1)
 
-			assert.NoError(t, e.Shutdown(context.Background()))
+			assert.NoError(t, e.Shutdown(t.Context()))
 			assert.Equal(t, 1, exp.ShutdownN(), "first Shutdown")
 
-			assert.NoError(t, e.Shutdown(context.Background()))
+			assert.NoError(t, e.Shutdown(t.Context()))
 			assert.Equal(t, 1, exp.ShutdownN(), "second Shutdown")
 		})
 
@@ -382,7 +374,7 @@ func TestBufferExporter(t *testing.T) {
 			defer func(orig otel.ErrorHandler) {
 				otel.SetErrorHandler(orig)
 			}(otel.GetErrorHandler())
-			handler := otel.ErrorHandlerFunc(func(err error) {})
+			handler := otel.ErrorHandlerFunc(func(error) {})
 			otel.SetErrorHandler(handler)
 
 			exp := newTestExporter(assert.AnError)
@@ -396,7 +388,7 @@ func TestBufferExporter(t *testing.T) {
 			// Make sure there is something to flush.
 			require.True(t, e.EnqueueExport(make([]Record, 1)))
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
 
 			err := e.Shutdown(ctx)
@@ -409,7 +401,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 
 			e := newBufferExporter(exp, 1)
-			assert.ErrorIs(t, e.Shutdown(context.Background()), assert.AnError)
+			assert.ErrorIs(t, e.Shutdown(t.Context()), assert.AnError)
 		})
 	})
 
@@ -419,7 +411,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 			e := newBufferExporter(exp, 2)
 
-			ctx := context.Background()
+			ctx := t.Context()
 			records := make([]Record, 1)
 			require.NoError(t, e.enqueue(ctx, records, nil), "enqueue")
 
@@ -442,7 +434,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(func() { close(trigger) })
 			e := newBufferExporter(exp, 1)
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			require.True(t, e.EnqueueExport(make([]Record, 1)))
 
 			got := make(chan error, 1)
@@ -465,7 +457,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 
 			e := newBufferExporter(exp, 1)
-			assert.ErrorIs(t, e.ForceFlush(context.Background()), assert.AnError)
+			assert.ErrorIs(t, e.ForceFlush(t.Context()), assert.AnError)
 		})
 
 		t.Run("Stopped", func(t *testing.T) {
@@ -474,7 +466,7 @@ func TestBufferExporter(t *testing.T) {
 
 			e := newBufferExporter(exp, 1)
 
-			ctx := context.Background()
+			ctx := t.Context()
 			_ = e.Shutdown(ctx)
 			assert.NoError(t, e.ForceFlush(ctx))
 		})
@@ -486,7 +478,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 			e := newBufferExporter(exp, 1)
 
-			assert.NoError(t, e.Export(context.Background(), nil))
+			assert.NoError(t, e.Export(t.Context(), nil))
 			assert.Equal(t, 0, exp.ExportN())
 		})
 
@@ -495,7 +487,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 			e := newBufferExporter(exp, 1)
 
-			ctx := context.Background()
+			ctx := t.Context()
 			records := make([]Record, 1)
 			records[0].SetBody(log.BoolValue(true))
 
@@ -520,7 +512,7 @@ func TestBufferExporter(t *testing.T) {
 			e := newBufferExporter(exp, 1)
 
 			records := make([]Record, 1)
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 
 			got := make(chan error, 1)
 			go func() { got <- e.Export(ctx, records) }()
@@ -542,7 +534,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 
 			e := newBufferExporter(exp, 1)
-			ctx, records := context.Background(), make([]Record, 1)
+			ctx, records := t.Context(), make([]Record, 1)
 			assert.ErrorIs(t, e.Export(ctx, records), assert.AnError)
 		})
 
@@ -552,7 +544,7 @@ func TestBufferExporter(t *testing.T) {
 
 			e := newBufferExporter(exp, 1)
 
-			ctx := context.Background()
+			ctx := t.Context()
 			_ = e.Shutdown(ctx)
 			assert.NoError(t, e.Export(ctx, make([]Record, 1)))
 			assert.Equal(t, 0, exp.ExportN(), "Export called")
@@ -566,7 +558,7 @@ func TestBufferExporter(t *testing.T) {
 			e := newBufferExporter(exp, 1)
 
 			assert.True(t, e.EnqueueExport(nil))
-			e.ForceFlush(context.Background())
+			e.ForceFlush(t.Context())
 			assert.Equal(t, 0, exp.ExportN(), "empty batch enqueued")
 		})
 
@@ -580,7 +572,7 @@ func TestBufferExporter(t *testing.T) {
 
 			assert.True(t, e.EnqueueExport(records))
 			assert.True(t, e.EnqueueExport(records))
-			e.ForceFlush(context.Background())
+			e.ForceFlush(t.Context())
 
 			n := exp.ExportN()
 			assert.Equal(t, 2, n, "Export number")
@@ -592,7 +584,7 @@ func TestBufferExporter(t *testing.T) {
 			t.Cleanup(exp.Stop)
 			e := newBufferExporter(exp, 1)
 
-			_ = e.Shutdown(context.Background())
+			_ = e.Shutdown(t.Context())
 			assert.True(t, e.EnqueueExport(make([]Record, 1)))
 		})
 	})

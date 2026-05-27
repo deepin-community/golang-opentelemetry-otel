@@ -21,8 +21,6 @@ import (
 	"go.opentelemetry.io/otel/internal/global"
 	"go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/noop"
-	ottest "go.opentelemetry.io/otel/sdk/internal/internaltest"
-	"go.opentelemetry.io/otel/sdk/log/internal/x"
 	"go.opentelemetry.io/otel/sdk/resource"
 )
 
@@ -42,7 +40,11 @@ func newProcessor(name string) *processor {
 	return &processor{Name: name}
 }
 
-func (p *processor) OnEmit(ctx context.Context, r *Record) error {
+func (*processor) Enabled(context.Context, EnabledParameters) bool {
+	return true
+}
+
+func (p *processor) OnEmit(_ context.Context, r *Record) error {
 	if p.Err != nil {
 		return p.Err
 	}
@@ -65,9 +67,8 @@ type fltrProcessor struct {
 	*processor
 
 	enabled bool
+	params  []EnabledParameters
 }
-
-var _ x.FilterProcessor = (*fltrProcessor)(nil)
 
 func newFltrProcessor(name string, enabled bool) *fltrProcessor {
 	return &fltrProcessor{
@@ -76,7 +77,8 @@ func newFltrProcessor(name string, enabled bool) *fltrProcessor {
 	}
 }
 
-func (p *fltrProcessor) Enabled(context.Context, log.EnabledParameters) bool {
+func (p *fltrProcessor) Enabled(_ context.Context, params EnabledParameters) bool {
+	p.params = append(p.params, params)
 	return p.enabled
 }
 
@@ -115,12 +117,14 @@ func TestNewLoggerProviderConfiguration(t *testing.T) {
 				WithProcessor(p1),
 				WithAttributeCountLimit(attrCntLim),
 				WithAttributeValueLengthLimit(attrValLenLim),
+				WithAllowKeyDuplication(),
 			},
 			want: &LoggerProvider{
 				resource:                  res,
 				processors:                []Processor{p0, p1},
 				attributeCountLimit:       attrCntLim,
 				attributeValueLengthLimit: attrValLenLim,
+				allowDupKeys:              true,
 			},
 		},
 		{
@@ -183,11 +187,7 @@ func mergeResource(t *testing.T, r1, r2 *resource.Resource) *resource.Resource {
 }
 
 func TestWithResource(t *testing.T) {
-	store, err := ottest.SetEnvVariables(map[string]string{
-		envVarResourceAttributes: "key=value,rk5=7",
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, store.Restore()) }()
+	t.Setenv(envVarResourceAttributes, "key=value,rk5=7")
 
 	cases := []struct {
 		name    string
@@ -206,9 +206,15 @@ func TestWithResource(t *testing.T) {
 			want:    resource.Default(),
 		},
 		{
-			name:    "explicit resource",
-			options: []LoggerProviderOption{WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5)))},
-			want:    mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5))),
+			name: "explicit resource",
+			options: []LoggerProviderOption{
+				WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5))),
+			},
+			want: mergeResource(
+				t,
+				resource.Environment(),
+				resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk2", 5)),
+			),
 		},
 		{
 			name: "last resource wins",
@@ -216,16 +222,25 @@ func TestWithResource(t *testing.T) {
 				WithResource(resource.NewSchemaless(attribute.String("rk1", "vk1"), attribute.Int64("rk2", 5))),
 				WithResource(resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10))),
 			},
-			want: mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10))),
+			want: mergeResource(
+				t,
+				resource.Environment(),
+				resource.NewSchemaless(attribute.String("rk3", "rv3"), attribute.Int64("rk4", 10)),
+			),
 		},
 		{
-			name:    "overlapping attributes with environment resource",
-			options: []LoggerProviderOption{WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10)))},
-			want:    mergeResource(t, resource.Environment(), resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10))),
+			name: "overlapping attributes with environment resource",
+			options: []LoggerProviderOption{
+				WithResource(resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10))),
+			},
+			want: mergeResource(
+				t,
+				resource.Environment(),
+				resource.NewSchemaless(attribute.String("rk1", "rv1"), attribute.Int64("rk5", 10)),
+			),
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := newProviderConfig(tc.options).resource
 			if diff := cmp.Diff(got, tc.want); diff != "" {
@@ -243,8 +258,8 @@ func TestLoggerProviderConcurrentSafe(t *testing.T) {
 
 	p := NewLoggerProvider(WithProcessor(newProcessor("0")))
 	const name = "testLogger"
-	ctx := context.Background()
-	for i := 0; i < goRoutineN; i++ {
+	ctx := t.Context()
+	for range goRoutineN {
 		go func() {
 			defer wg.Done()
 
@@ -262,10 +277,10 @@ type logSink struct {
 
 	level         int
 	msg           string
-	keysAndValues []interface{}
+	keysAndValues []any
 }
 
-func (l *logSink) Enabled(int) bool { return true }
+func (*logSink) Enabled(int) bool { return true }
 
 func (l *logSink) Info(level int, msg string, keysAndValues ...any) {
 	l.level, l.msg, l.keysAndValues = level, msg, keysAndValues
@@ -284,11 +299,11 @@ func TestLoggerProviderLogger(t *testing.T) {
 		assert.Equal(t, 1, l.level, "logged level")
 		assert.Equal(t, "Invalid Logger name.", l.msg, "logged message")
 		require.Len(t, l.keysAndValues, 2, "logged key values")
-		assert.Equal(t, "", l.keysAndValues[1], "logged name")
+		assert.Empty(t, l.keysAndValues[1], "logged name")
 	})
 
 	t.Run("Stopped", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		p := NewLoggerProvider()
 		_ = p.Shutdown(ctx)
 		l := p.Logger("testing")
@@ -300,11 +315,29 @@ func TestLoggerProviderLogger(t *testing.T) {
 	t.Run("SameLoggers", func(t *testing.T) {
 		p := NewLoggerProvider()
 
-		l0, l1 := p.Logger("l0"), p.Logger("l1")
-		l2, l3 := p.Logger("l0"), p.Logger("l1")
+		l0, l1, l2 := p.Logger(
+			"l0",
+		), p.Logger(
+			"l1",
+		), p.Logger(
+			"l0",
+			log.WithInstrumentationAttributes(attribute.String("foo", "bar")),
+		)
+		assert.NotSame(t, l0, l1)
+		assert.NotSame(t, l0, l2)
+		assert.NotSame(t, l1, l2)
 
-		assert.Same(t, l0, l2)
-		assert.Same(t, l1, l3)
+		l3, l4, l5 := p.Logger(
+			"l0",
+		), p.Logger(
+			"l1",
+		), p.Logger(
+			"l0",
+			log.WithInstrumentationAttributes(attribute.String("foo", "bar")),
+		)
+		assert.Same(t, l0, l3)
+		assert.Same(t, l1, l4)
+		assert.Same(t, l2, l5)
 	})
 }
 
@@ -313,7 +346,7 @@ func TestLoggerProviderShutdown(t *testing.T) {
 		proc := newProcessor("")
 		p := NewLoggerProvider(WithProcessor(proc))
 
-		ctx := context.Background()
+		ctx := t.Context()
 		require.NoError(t, p.Shutdown(ctx))
 		require.Equal(t, 1, proc.shutdownCalls, "processor Shutdown not called")
 
@@ -326,7 +359,7 @@ func TestLoggerProviderShutdown(t *testing.T) {
 		proc.Err = assert.AnError
 		p := NewLoggerProvider(WithProcessor(proc))
 
-		ctx := context.Background()
+		ctx := t.Context()
 		assert.ErrorIs(t, p.Shutdown(ctx), assert.AnError, "processor error not returned")
 	})
 }
@@ -336,7 +369,7 @@ func TestLoggerProviderForceFlush(t *testing.T) {
 		proc := newProcessor("")
 		p := NewLoggerProvider(WithProcessor(proc))
 
-		ctx := context.Background()
+		ctx := t.Context()
 		require.NoError(t, p.ForceFlush(ctx))
 		require.Equal(t, 1, proc.forceFlushCalls, "processor ForceFlush not called")
 
@@ -350,7 +383,7 @@ func TestLoggerProviderForceFlush(t *testing.T) {
 		proc := newProcessor("")
 		p := NewLoggerProvider(WithProcessor(proc))
 
-		ctx := context.Background()
+		ctx := t.Context()
 		require.NoError(t, p.ForceFlush(ctx))
 		require.Equal(t, 1, proc.forceFlushCalls, "processor ForceFlush not called")
 
@@ -363,7 +396,7 @@ func TestLoggerProviderForceFlush(t *testing.T) {
 		proc.Err = assert.AnError
 		p := NewLoggerProvider(WithProcessor(proc))
 
-		ctx := context.Background()
+		ctx := t.Context()
 		assert.ErrorIs(t, p.ForceFlush(ctx), assert.AnError, "processor error not returned")
 	})
 }
@@ -384,5 +417,5 @@ func BenchmarkLoggerProviderLogger(b *testing.B) {
 	}
 
 	b.StopTimer()
-	loggers[0].Enabled(context.Background(), log.EnabledParameters{})
+	loggers[0].Enabled(b.Context(), log.EnabledParameters{})
 }

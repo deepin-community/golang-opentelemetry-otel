@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -18,9 +19,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"go.opentelemetry.io/otel/trace"
-	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
 func TestSpanKind(t *testing.T) {
@@ -94,8 +94,21 @@ func TestSpanEvent(t *testing.T) {
 	eventTimestamp := uint64(1589932800 * 1e9)
 	assert.Equal(t, &tracepb.Span_Event{Name: "test 1", Attributes: nil, TimeUnixNano: eventTimestamp}, got[0])
 	// Do not test Attributes directly, just that the return value goes to the correct field.
-	assert.Equal(t, &tracepb.Span_Event{Name: "test 2", Attributes: KeyValues(attrs), TimeUnixNano: eventTimestamp, DroppedAttributesCount: 2}, got[1])
-	assert.Equal(t, &tracepb.Span_Event{Name: "test 3", Attributes: KeyValues(attrs), TimeUnixNano: 0, DroppedAttributesCount: 2}, got[2])
+	assert.Equal(
+		t,
+		&tracepb.Span_Event{
+			Name:                   "test 2",
+			Attributes:             KeyValues(attrs),
+			TimeUnixNano:           eventTimestamp,
+			DroppedAttributesCount: 2,
+		},
+		got[1],
+	)
+	assert.Equal(
+		t,
+		&tracepb.Span_Event{Name: "test 3", Attributes: KeyValues(attrs), TimeUnixNano: 0, DroppedAttributesCount: 2},
+		got[2],
+	)
 }
 
 func TestNilLinks(t *testing.T) {
@@ -194,9 +207,64 @@ func TestBuildSpanFlags(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.wantFlags, buildSpanFlags(tt.spanContext))
+			assert.Equal(t, tt.wantFlags, buildSpanFlagsWith(tt.spanContext.TraceFlags(), tt.spanContext))
 		})
 	}
+}
+
+func TestSpanFlagsLower8BitsFromTraceFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		traceFlags   trace.TraceFlags
+		parentRemote bool
+		wantLow8     uint32
+		wantMask     uint32
+	}{
+		{name: "unsampled root", traceFlags: 0x00, parentRemote: false, wantLow8: 0x00, wantMask: 0x100},
+		{name: "sampled root", traceFlags: 0x01, parentRemote: false, wantLow8: 0x01, wantMask: 0x100},
+		{name: "custom bits root", traceFlags: 0x05, parentRemote: false, wantLow8: 0x05, wantMask: 0x100},
+		{name: "unsampled remote parent", traceFlags: 0x00, parentRemote: true, wantLow8: 0x00, wantMask: 0x300},
+		{name: "sampled remote parent", traceFlags: 0x01, parentRemote: true, wantLow8: 0x01, wantMask: 0x300},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := trace.NewSpanContext(trace.SpanContextConfig{Remote: tc.parentRemote})
+			got := buildSpanFlagsWith(tc.traceFlags, parent)
+			assert.Equal(t, tc.wantLow8, got&0xff)
+			assert.Equal(t, tc.wantMask, got&0x300)
+			// Ensure higher bits are not set beyond 0-9
+			assert.Equal(t, uint32(0), got&^uint32(0x3ff))
+		})
+	}
+}
+
+func TestSpanAndLinkExportLower8Bits(t *testing.T) {
+	// Span: sampled child with local parent
+	spanData := tracetest.SpanStub{
+		SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID:    trace.TraceID{0x1},
+			SpanID:     trace.SpanID{0x2},
+			TraceFlags: trace.TraceFlags(0x01),
+		}),
+		Parent: trace.NewSpanContext(trace.SpanContextConfig{}),
+		Name:   "flags-test",
+	}
+	rss := Spans(tracetest.SpanStubs{spanData}.Snapshots())
+	require.Len(t, rss, 1)
+	scopeSpans := rss[0].GetScopeSpans()
+	require.Len(t, scopeSpans, 1)
+	require.Len(t, scopeSpans[0].Spans, 1)
+	s := scopeSpans[0].Spans[0]
+	assert.Equal(t, uint32(0x01), s.Flags&0xff)
+	assert.Equal(t, uint32(0x100), s.Flags&0x300)
+
+	// Link: sampled link local
+	l := []tracesdk.Link{
+		{SpanContext: trace.NewSpanContext(trace.SpanContextConfig{TraceFlags: 0x01})},
+	}
+	gotLinks := links(l)
+	require.Len(t, gotLinks, 1)
+	assert.Equal(t, uint32(0x01), gotLinks[0].Flags&0xff)
+	assert.Equal(t, uint32(0x100), gotLinks[0].Flags&0x300)
 }
 
 func TestNilSpan(t *testing.T) {
@@ -220,12 +288,18 @@ func TestSpanData(t *testing.T) {
 	traceState, _ := trace.ParseTraceState("key1=val1,key2=val2")
 	spanData := tracetest.SpanStub{
 		SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
-			TraceID:    trace.TraceID{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
+			TraceID: trace.TraceID{
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+				0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+			},
 			SpanID:     trace.SpanID{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
 			TraceState: traceState,
 		}),
 		Parent: trace.NewSpanContext(trace.SpanContextConfig{
-			TraceID:    trace.TraceID{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
+			TraceID: trace.TraceID{
+				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+				0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+			},
 			SpanID:     trace.SpanID{0xEF, 0xEE, 0xED, 0xEC, 0xEB, 0xEA, 0xE9, 0xE8},
 			TraceState: traceState,
 			Remote:     true,
@@ -251,7 +325,10 @@ func TestSpanData(t *testing.T) {
 		Links: []tracesdk.Link{
 			{
 				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
-					TraceID:    trace.TraceID{0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF},
+					TraceID: trace.TraceID{
+						0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,
+						0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF,
+					},
 					SpanID:     trace.SpanID{0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7},
 					TraceFlags: 0,
 				}),
@@ -262,7 +339,10 @@ func TestSpanData(t *testing.T) {
 			},
 			{
 				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
-					TraceID:    trace.TraceID{0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF},
+					TraceID: trace.TraceID{
+						0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7,
+						0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF,
+					},
 					SpanID:     trace.SpanID{0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7},
 					TraceFlags: 0,
 				}),
@@ -299,11 +379,14 @@ func TestSpanData(t *testing.T) {
 	// ordering impossible to guarantee on the output. The Resource
 	// transform function has unit tests that should suffice.
 	expectedSpan := &tracepb.Span{
-		TraceId:                []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F},
+		TraceId: []byte{
+			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+			0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+		},
 		SpanId:                 []byte{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8},
 		ParentSpanId:           []byte{0xEF, 0xEE, 0xED, 0xEC, 0xEB, 0xEA, 0xE9, 0xE8},
 		TraceState:             "key1=val1,key2=val2",
-		Flags:                  0x300,
+		Flags:                  0x300, // lower 8 bits (trace flags) are 0x00 in this fixture; update in new tests below
 		Name:                   spanData.Name,
 		Kind:                   tracepb.Span_SPAN_KIND_SERVER,
 		StartTimeUnixNano:      uint64(startTime.UnixNano()),

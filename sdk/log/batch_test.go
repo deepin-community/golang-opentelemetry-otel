@@ -44,7 +44,7 @@ func (b *concurrentBuffer) String() string {
 func TestEmptyBatchConfig(t *testing.T) {
 	assert.NotPanics(t, func() {
 		var bp BatchProcessor
-		ctx := context.Background()
+		ctx := t.Context()
 		record := new(Record)
 		assert.NoError(t, bp.OnEmit(ctx, record), "OnEmit")
 		assert.NoError(t, bp.ForceFlush(ctx), "ForceFlush")
@@ -191,7 +191,7 @@ func TestNewBatchConfig(t *testing.T) {
 }
 
 func TestBatchProcessor(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("NilExporter", func(t *testing.T) {
 		assert.NotPanics(t, func() { NewBatchProcessor(nil) })
@@ -207,7 +207,7 @@ func TestBatchProcessor(t *testing.T) {
 			WithExportInterval(time.Nanosecond),
 			WithExportTimeout(time.Hour),
 		)
-		for i := 0; i < size; i++ {
+		for range size {
 			assert.NoError(t, b.OnEmit(ctx, new(Record)))
 		}
 		var got []Record
@@ -220,6 +220,13 @@ func TestBatchProcessor(t *testing.T) {
 		_ = b.Shutdown(ctx)
 	})
 
+	t.Run("Enabled", func(t *testing.T) {
+		e := newTestExporter(nil)
+		b := NewBatchProcessor(e)
+		enabled := b.Enabled(ctx, EnabledParameters{})
+		assert.True(t, enabled, "Enabled should return true")
+	})
+
 	t.Run("OnEmit", func(t *testing.T) {
 		const batch = 10
 		e := newTestExporter(nil)
@@ -230,7 +237,7 @@ func TestBatchProcessor(t *testing.T) {
 			WithExportInterval(time.Hour),
 			WithExportTimeout(time.Hour),
 		)
-		for i := 0; i < 10*batch; i++ {
+		for range 10 * batch {
 			assert.NoError(t, b.OnEmit(ctx, new(Record)))
 		}
 		assert.Eventually(t, func() bool {
@@ -253,7 +260,7 @@ func TestBatchProcessor(t *testing.T) {
 			WithExportInterval(time.Hour),
 			WithExportTimeout(time.Hour),
 		)
-		for i := 0; i < 2*batch; i++ {
+		for range 2 * batch {
 			assert.NoError(t, b.OnEmit(ctx, new(Record)))
 		}
 
@@ -293,7 +300,7 @@ func TestBatchProcessor(t *testing.T) {
 			b := NewBatchProcessor(e)
 
 			const shutdowns = 3
-			for i := 0; i < shutdowns; i++ {
+			for range shutdowns {
 				assert.NoError(t, b.Shutdown(ctx))
 			}
 			assert.Equal(t, 1, e.ShutdownN(), "exporter Shutdown calls")
@@ -326,7 +333,7 @@ func TestBatchProcessor(t *testing.T) {
 			t.Cleanup(func() { close(e.ExportTrigger) })
 			b := NewBatchProcessor(e)
 
-			ctx := context.Background()
+			ctx := t.Context()
 			c, cancel := context.WithCancel(ctx)
 			cancel()
 
@@ -382,7 +389,7 @@ func TestBatchProcessor(t *testing.T) {
 			)
 
 			// Enqueue 10 x "batch size" amount of records.
-			for i := 0; i < 10*batch; i++ {
+			for range 10 * batch {
 				require.NoError(t, b.OnEmit(ctx, new(Record)))
 			}
 			assert.Eventually(t, func() bool {
@@ -490,10 +497,8 @@ func TestBatchProcessor(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(ctx)
 		var wg sync.WaitGroup
-		for i := 0; i < goRoutines-1; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range goRoutines - 1 {
+			wg.Go(func() {
 				for {
 					select {
 					case <-ctx.Done():
@@ -504,19 +509,17 @@ func TestBatchProcessor(t *testing.T) {
 						_ = b.ForceFlush(ctx)
 					}
 				}
-			}()
+			})
 		}
 
 		require.Eventually(t, func() bool {
 			return e.ExportN() > 0
 		}, 2*time.Second, time.Microsecond, "export before shutdown")
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			assert.NoError(t, b.Shutdown(ctx))
 			cancel()
-		}()
+		})
 
 		wg.Wait()
 	})
@@ -582,7 +585,7 @@ func TestQueue(t *testing.T) {
 	t.Run("TryFlush", func(t *testing.T) {
 		const size = 3
 		q := newQueue(size)
-		for i := 0; i < size-1; i++ {
+		for range size - 1 {
 			q.write.Value = r
 			q.write = q.write.Next()
 			q.len++
@@ -627,7 +630,7 @@ func TestQueue(t *testing.T) {
 		wg.Add(goRoutines)
 
 		b := newQueue(goRoutines)
-		for i := 0; i < goRoutines; i++ {
+		for range goRoutines {
 			go func() {
 				defer wg.Done()
 				b.Enqueue(Record{})
@@ -649,7 +652,7 @@ func BenchmarkBatchProcessorOnEmit(b *testing.B) {
 	r.SetBody(body)
 
 	rSize := unsafe.Sizeof(r) + unsafe.Sizeof(body)
-	ctx := context.Background()
+	ctx := b.Context()
 	bp := NewBatchProcessor(
 		defaultNoopExporter,
 		WithMaxQueueSize(b.N+1),

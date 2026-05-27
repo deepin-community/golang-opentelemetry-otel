@@ -4,7 +4,6 @@
 package noop // import "go.opentelemetry.io/otel/log/noop"
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
@@ -18,11 +17,11 @@ func TestImplementationNoPanics(t *testing.T) {
 	// methods added to it than the No-Op implementation implements them.
 	t.Run("LoggerProvider", assertAllExportedMethodNoPanic(
 		reflect.ValueOf(LoggerProvider{}),
-		reflect.TypeOf((*log.LoggerProvider)(nil)).Elem(),
+		reflect.TypeFor[log.LoggerProvider](),
 	))
 	t.Run("Logger", assertAllExportedMethodNoPanic(
 		reflect.ValueOf(Logger{}),
-		reflect.TypeOf((*log.Logger)(nil)).Elem(),
+		reflect.TypeFor[log.Logger](),
 	))
 }
 
@@ -44,7 +43,7 @@ func assertAllExportedMethodNoPanic(rVal reflect.Value, rType reflect.Type) func
 				numIn--
 			}
 			args := make([]reflect.Value, numIn)
-			ctx := context.Background()
+			ctx := t.Context()
 			for i := range args {
 				aType := mType.Type.In(i)
 				if aType.Name() == "Context" {

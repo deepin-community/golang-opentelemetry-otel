@@ -5,15 +5,13 @@ package trace
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/sdk/internal/env"
-	ottest "go.opentelemetry.io/otel/sdk/internal/internaltest"
+	"go.opentelemetry.io/otel/sdk/trace/internal/env"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -111,11 +109,8 @@ func TestSettingSpanLimits(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.env != nil {
-				es := ottest.NewEnvStore()
-				t.Cleanup(func() { require.NoError(t, es.Restore()) })
 				for k, v := range test.env {
-					es.Record(k)
-					require.NoError(t, os.Setenv(k, v))
+					t.Setenv(k, v)
 				}
 			}
 
@@ -134,17 +129,17 @@ func TestSettingSpanLimits(t *testing.T) {
 
 type recorder []ReadOnlySpan
 
-func (r *recorder) OnStart(context.Context, ReadWriteSpan) {}
-func (r *recorder) OnEnd(s ReadOnlySpan)                   { *r = append(*r, s) }
-func (r *recorder) ForceFlush(context.Context) error       { return nil }
-func (r *recorder) Shutdown(context.Context) error         { return nil }
+func (*recorder) OnStart(context.Context, ReadWriteSpan) {}
+func (r *recorder) OnEnd(s ReadOnlySpan)                 { *r = append(*r, s) }
+func (*recorder) ForceFlush(context.Context) error       { return nil }
+func (*recorder) Shutdown(context.Context) error         { return nil }
 
 func testSpanLimits(t *testing.T, limits SpanLimits) ReadOnlySpan {
 	rec := new(recorder)
 	tp := NewTracerProvider(WithRawSpanLimits(limits), WithSpanProcessor(rec))
 	tracer := tp.Tracer("testSpanLimits")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	a := []attribute.KeyValue{attribute.Bool("one", true), attribute.Bool("two", true)}
 	l := trace.Link{
 		SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
@@ -183,7 +178,7 @@ func TestSpanLimits(t *testing.T) {
 		// Ensure string and string slice attributes are truncated.
 		assert.Contains(t, attrs, attribute.String("string", "ab"))
 		assert.Contains(t, attrs, attribute.StringSlice("stringSlice", []string{"ab", "de"}))
-		assert.Contains(t, attrs, attribute.String("euro", ""))
+		assert.Contains(t, attrs, attribute.String("euro", "€"))
 
 		limits.AttributeValueLengthLimit = 0
 		attrs = testSpanLimits(t, limits).Attributes()
